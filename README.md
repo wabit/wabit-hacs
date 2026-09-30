@@ -8,6 +8,8 @@ each time.
 | --- | --- |
 | `wabit-wakeup-card` | Control a sunrise-style wake-up light: set the time per schedule, toggle each schedule on or off, and drag a shared fade length — with a live sunrise ramp while it runs. |
 
+![The wakeup card in light and dark Material You themes](https://raw.githubusercontent.com/wabit/wabit-hacs/main/docs/preview.png)
+
 Every colour comes from a theme token (`--md-sys-color-*` first, then the standard Home
 Assistant variables), so the cards inherit whatever theme the dashboard uses — including
 Material You — instead of imposing their own palette.
@@ -159,6 +161,17 @@ is what the browser loads.
 ```bash
 node --check dist/wabit-cards.js   # parses
 node test/card.test.mjs            # stubs a DOM and drives the real render paths
+```
+
+`test/preview.html` renders the card outside Home Assistant, with stand-ins for
+`ha-card` / `ha-icon` / `ha-switch` and Material You tokens, on a pinned clock so the
+states stay stable. It is what `docs/preview.png` is captured from - open it in a browser,
+or screenshot it headlessly:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless=new --force-device-scale-factor=2 --window-size=912,517 \
+  --screenshot=docs/preview.png test/preview.html
 ```
 
 Releases are cut by pushing a tag (`v1.0.0`), which runs the tests and attaches the card to a

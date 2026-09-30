@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 const REPO = "https://github.com/wabit/wabit-hacs";
 
 console.info(
@@ -158,13 +158,16 @@ const STYLES = `
     position: relative; height: 8px; border-radius: 999px; margin-top: 12px;
     background: linear-gradient(90deg, #2c2342 0%, #59386c 20%, #b8553c 50%, #efa94e 76%, #ffeec2 100%);
     box-shadow: 0 1px 6px rgba(0, 0, 0, 0.18) inset;
-    overflow: hidden;
+    overflow: hidden; opacity: 0.55; transition: opacity 400ms ease;
   }
+  .ramp.live { opacity: 1; }
   .ramp.hidden { display: none; }
+  /* Scrims the part of the ramp still to come. Deliberately a translucent
+     literal rather than a theme token: an opaque surface colour would hide the
+     sunrise gradient underneath it. */
   .ramp-veil {
     position: absolute; inset: 0; left: 0;
-    background: var(--wc-tonal);
-    backdrop-filter: saturate(0.2) brightness(0.8);
+    background: rgba(0, 0, 0, 0.5);
     transition: transform 600ms ease;
     transform-origin: right center;
   }
@@ -200,6 +203,7 @@ const STYLES = `
   .sub {
     color: var(--wc-muted); font-size: 0.78rem; line-height: 1.35;
     min-height: 1.1em; font-variant-numeric: tabular-nums;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .row.off .name { opacity: 0.6; }
   .row.missing .sub { color: var(--error-color, #db4437); }
@@ -542,7 +546,7 @@ class WabitWakeupCard extends HTMLElement {
         value.textContent = "-";
       } else {
         row.classList.remove("missing");
-        sub.textContent = "how long the light takes to reach full";
+        sub.textContent = "ramp length";
         const a = st.attributes || {};
         slider.min = String(a.min !== undefined ? a.min : FADE_FALLBACK.min);
         slider.max = String(a.max !== undefined ? a.max : FADE_FALLBACK.max);
