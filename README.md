@@ -63,7 +63,8 @@ it over.
 | `show_others` | boolean | `true` | The room's other players underneath. |
 | `show_header` | boolean | `true` | The room name. |
 | `presets` | list | – | One-tap shortcuts under the player. See below. |
-| `art_backdrop` | boolean | `true` | Wash the panel in the artwork's colours. |
+| `artwork` | `cover` \| `tile` \| `none` | `cover` | How prominent the artwork is. See below. |
+| `art_backdrop` | boolean | `true` | In `tile` mode only, wash the panel in the artwork's colours. |
 
 ### One speaker, several integrations
 
@@ -77,6 +78,23 @@ announcements, the second is a camera intercom. More importantly, the card featu
 whatever is **active**, and the duplicates are invariably idle, so they fall to the
 bottom of the list on their own rather than needing to be hunted down. Add anything that
 still gets in the way to `exclude`.
+
+### Artwork
+
+```yaml
+artwork: cover   # the default
+```
+
+- **`cover`** — the artwork *is* the panel. It bleeds to the card edges with the title,
+  progress and controls laid over it, behind a scrim that keeps text readable over any
+  image. The same idea as Home Assistant's own media control card.
+- **`tile`** — a thumbnail beside the text, with the artwork repeated behind the panel
+  blurred and dimmed so the card picks up the album's colours. `art_backdrop: false`
+  drops that wash.
+- **`none`** — no artwork at all.
+
+`cover` needs an image to cover with, so a player reporting no artwork falls back to the
+tile layout rather than showing an empty panel.
 
 ### Presets
 

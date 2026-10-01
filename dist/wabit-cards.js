@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.10.0";
+const VERSION = "1.11.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -3384,7 +3384,45 @@ const MEDIA_STYLES = `
       transparent 0%, #000 22%, #000 58%, transparent 100%);
   }
   .stage.washed .wash { opacity: 0.3; }
+  .stage-body { position: relative; z-index: 1; }
   .now { position: relative; z-index: 1; display: flex; gap: 16px; align-items: flex-start; }
+
+  /* ------------------------------------------------------- cover artwork --
+     The artwork becomes the panel, bleeding to the card edges, with the text
+     and controls laid over it - the same idea as Home Assistant's own media
+     control card. A scrim keeps text readable over any image. */
+  .stage.cover {
+    margin: -4px -16px 0; min-height: 232px;
+    display: flex; align-items: flex-end;
+    background: var(--art) center/cover no-repeat;
+  }
+  .stage.cover .wash {
+    inset: 0; opacity: 1; filter: none;
+    background: linear-gradient(to top,
+      rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.66) 34%,
+      rgba(0, 0, 0, 0.26) 64%, rgba(0, 0, 0, 0.04) 100%);
+    -webkit-mask-image: none; mask-image: none;
+  }
+  .stage.cover .stage-body { width: 100%; padding: 16px; }
+  .stage.cover .art { display: none; }
+  .stage.cover .meta { padding-top: 0; }
+  .stage.cover .eyebrow { color: rgba(255, 255, 255, 0.76); }
+  .stage.cover .track {
+    color: #fff; font-size: 1.45rem; font-weight: 500;
+    text-shadow: 0 1px 10px rgba(0, 0, 0, 0.45);
+  }
+  .stage.cover .sub { color: rgba(255, 255, 255, 0.88); font-size: 0.9rem; }
+  .stage.cover .where { color: rgba(255, 255, 255, 0.68); }
+  .stage.cover .bar { background: rgba(255, 255, 255, 0.28); }
+  .stage.cover .bar-fill { background: #fff; }
+  .stage.cover .times { color: rgba(255, 255, 255, 0.82); }
+  .stage.cover .btn { color: rgba(255, 255, 255, 0.92); }
+  .stage.cover .btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.2); color: #fff; }
+  .stage.cover .btn:disabled { opacity: 0.4; }
+  .stage.cover .btn.primary { background: rgba(255, 255, 255, 0.95); color: #141414; }
+  .stage.cover .btn.primary:hover:not(:disabled) { background: #fff; filter: none; }
+  .stage.cover input.volume { accent-color: #fff; }
+  .stage.cover .progress { margin-top: 14px; }
   .now.hidden { display: none; }
   .art {
     width: 104px; height: 104px; border-radius: 14px; flex: none;
@@ -3563,6 +3601,14 @@ class WabitMediaCard extends HTMLElement {
       show_progress: cfg.show_progress !== false,
       show_others: cfg.show_others !== false,
       idle_text: cfg.idle_text || "Nothing playing",
+      // cover: the artwork is the panel, text and controls over it.
+      // tile:   a thumbnail beside the text, with a blurred colour wash.
+      // none:   no artwork at all.
+      artwork: ["tile", "none", "cover"].includes(cfg.artwork)
+        ? cfg.artwork
+        : cfg.art_backdrop === false
+          ? "tile"   // honours the older option, which meant "tile, no wash"
+          : "cover",
       art_backdrop: cfg.art_backdrop !== false,
       presets: this._readPresets(cfg.presets),
     };
@@ -3779,14 +3825,17 @@ class WabitMediaCard extends HTMLElement {
     const a = st.attributes || {};
     const now = new Date();
 
-    const art = a.entity_picture || "";
-    if (e.art._art !== art) {
+    const mode = this._config.artwork;
+    const art = mode === "none" ? "" : a.entity_picture || "";
+    if (e.art._art !== art || e.stage._mode !== mode) {
       e.art._art = art;
+      e.stage._mode = mode;
       e.art.style.backgroundImage = art ? `url("${art}")` : "";
       e.art.classList.toggle("has-art", !!art);
-      const wash = art && this._config.art_backdrop;
       e.stage.style.setProperty("--art", art ? `url("${art}")` : "none");
-      e.stage.classList.toggle("washed", !!wash);
+      // Cover needs an image to cover with; without one it falls back to tile.
+      e.stage.classList.toggle("cover", mode === "cover" && !!art);
+      e.stage.classList.toggle("washed", mode === "tile" && !!art && this._config.art_backdrop);
     }
 
     const stateWord =
@@ -4019,8 +4068,11 @@ class WabitMediaCard extends HTMLElement {
     const where = document.createElement("div");
     where.className = "where";
     meta.append(eyebrow, track, sub, where);
+    const stageBody = document.createElement("div");
+    stageBody.className = "stage-body";
     now.append(art, meta);
-    stage.appendChild(now);
+    stageBody.appendChild(now);
+    stage.appendChild(stageBody);
     body.appendChild(stage);
 
     // progress
@@ -4037,7 +4089,7 @@ class WabitMediaCard extends HTMLElement {
     const total = document.createElement("span");
     times.append(elapsed, total);
     progress.append(bar, times);
-    body.appendChild(progress);
+    stageBody.appendChild(progress);
 
     // controls
     const controls = document.createElement("div");
@@ -4075,7 +4127,7 @@ class WabitMediaCard extends HTMLElement {
     );
     vol.append(mute.b, volume);
     controls.append(prev.b, play.b, next.b, spacer, vol);
-    body.appendChild(controls);
+    stageBody.appendChild(controls);
 
     const presets = document.createElement("div");
     presets.className = "presets hidden";

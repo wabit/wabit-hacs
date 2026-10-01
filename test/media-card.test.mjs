@@ -308,15 +308,48 @@ eq("the older is still listed as playing",
    both._els.otherRows.find((r) => r.id === "media_player.fireplace").row
      .classList.contains("live"), true);
 
+/* --------------------------------------------------------- artwork modes */
+const cover = mk({ area: "living_room" });
+eq("cover is the default", cover._config.artwork, "cover");
+eq("cover applied when there is artwork",
+   cover._els.stage.classList.contains("cover"), true);
+eq("cover does not also wash", cover._els.stage.classList.contains("washed"), false);
+// Controls and progress live inside the panel so they can sit over the image.
+eq("progress is inside the stage",
+   cover._els.stage.children[1].children.includes(cover._els.progress), true);
+eq("controls are inside the stage",
+   cover._els.stage.children[1].children.includes(cover._els.controls), true);
+
+// No artwork to cover with: fall back rather than showing a blank panel.
+const coverNoArt = mk({ area: "office" });
+eq("no artwork means no cover", coverNoArt._els.stage.classList.contains("cover"), false);
+eq("the tile is still there", coverNoArt._els.art.classList.contains("has-art"), false);
+
+const tile = mk({ area: "living_room", artwork: "tile" });
+eq("tile mode has no cover", tile._els.stage.classList.contains("cover"), false);
+eq("tile mode washes", tile._els.stage.classList.contains("washed"), true);
+eq("tile mode keeps the thumbnail", tile._els.art.classList.contains("has-art"), true);
+
+const none = mk({ area: "living_room", artwork: "none" });
+eq("none means no cover", none._els.stage.classList.contains("cover"), false);
+eq("none means no wash", none._els.stage.classList.contains("washed"), false);
+eq("none means no thumbnail", none._els.art.classList.contains("has-art"), false);
+
+// The older art_backdrop option still means "tile, no wash".
+const legacyArt = mk({ area: "living_room", art_backdrop: false });
+eq("art_backdrop false still gives tile", legacyArt._config.artwork, "tile");
+eq("art_backdrop false does not wash",
+   legacyArt._els.stage.classList.contains("washed"), false);
+
 /* ----------------------------------------------------------- artwork wash */
 // A fresh card: `lr` has been tapped around by the interaction tests above.
-const washed = mk({ area: "living_room" });
+const washed = mk({ area: "living_room", artwork: "tile" });
 eq("wash on when there is artwork", washed._els.stage.classList.contains("washed"), true);
 eq("wash carries the image",
    washed._els.stage.style._props["--art"].includes("media_player_proxy"), true);
-const noWash = mk({ area: "living_room", art_backdrop: false });
+const noWash = mk({ area: "living_room", artwork: "tile", art_backdrop: false });
 eq("wash can be turned off", noWash._els.stage.classList.contains("washed"), false);
-const noArt = mk({ area: "office" });
+const noArt = mk({ area: "office", artwork: "tile" });
 eq("no wash without artwork", noArt._els.stage.classList.contains("washed"), false);
 
 /* ---------------------------------------------------------- presets ---
