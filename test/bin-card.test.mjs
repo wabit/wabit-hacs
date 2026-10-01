@@ -235,8 +235,8 @@ eq("four bins on three days", auto._lastModel.groups.length, 3);
 eq("shared day grouped",
    auto._lastModel.groups[0].bins.map((b) => b.key).sort(),
    ["sensor.bins_240l_burgundy_plastic_bin", "sensor.bins_240l_green_garden_bin"]);
-eq("prefix stripped from labels",
-   auto._lastModel.groups[1].bins[0].label, "140L grey rubbish bin");
+eq("prefix and size stripped, first letter capitalised",
+   auto._lastModel.groups[1].bins[0].label, "Grey rubbish bin");
 eq("colour taken from the sensor",
    auto._lastModel.groups[1].bins[0].color, "grey");
 eq("icon taken from the sensor",
@@ -244,7 +244,7 @@ eq("icon taken from the sensor",
 eq("hero date", auto._els.heroDate.textContent, "Wed 7 Oct");
 eq("hero countdown recomputed from the date", auto._els.heroWhen.textContent, "in 6 days");
 eq("hero chips", auto._els.chips.children.map((c) => c.children[1].textContent),
-   ["240L burgundy plastic bin", "240L green garden bin"]);
+   ["Burgundy plastic bin", "Green garden bin"]);
 eq("rows for the other days", auto._els.rows.children.length, 2);
 eq("row countdown", auto._els.rows.children[0].children[2].textContent, "in 13 days");
 
@@ -264,6 +264,44 @@ eq("override label", greyGroup.bins[0].label, "Rubbish");
 eq("override colour", greyGroup.bins[0].color, "#101010");
 eq("override leaves others alone",
    over._lastModel.groups[0].bins[0].color, "maroon");
+
+
+/* ----------------------------------------------------- tidying the names */
+eq("strips a litre size", T.stripBinSize("240L green garden bin"), "green garden bin");
+eq("strips a spaced litre size", T.stripBinSize("240 litre beige recycling bin"),
+   "beige recycling bin");
+eq("strips lowercase l", T.stripBinSize("140l grey rubbish bin"), "grey rubbish bin");
+eq("leaves a name with no size", T.stripBinSize("Green garden bin"), "Green garden bin");
+// Must never return nothing - a bin called only by its size keeps that name.
+eq("never empties the name", T.stripBinSize("240L"), "240L");
+eq("does not strip a size mid-name", T.stripBinSize("garden 240L bin"), "garden 240L bin");
+
+eq("sentence case", T.applyCase("green garden bin", "sentence"), "Green garden bin");
+eq("title case", T.applyCase("green garden bin", "title"), "Green Garden Bin");
+eq("case left alone", T.applyCase("green garden bin", "none"), "green garden bin");
+eq("already capitalised is untouched", T.applyCase("Green garden bin", "sentence"),
+   "Green garden bin");
+eq("empty name survives", T.applyCase("", "title"), "");
+
+const titled = mkUk({ label_case: "title" });
+eq("title case applied to labels",
+   titled._lastModel.groups[1].bins[0].label, "Grey Rubbish Bin");
+const plain = mkUk({ label_case: "none" });
+eq("case can be left alone",
+   plain._lastModel.groups[1].bins[0].label, "grey rubbish bin");
+const sized = mkUk({ strip_size: false });
+eq("size can be kept",
+   sized._lastModel.groups[1].bins[0].label, "140L grey rubbish bin");
+const raw = mkUk({ strip_size: false, strip_prefix: false, label_case: "none" });
+eq("everything off leaves the sensor name",
+   raw._lastModel.groups[1].bins[0].label, "Bins 140L grey rubbish bin");
+
+// An explicit override is used verbatim - no trimming, no recasing.
+const verbatim = mkUk({ overrides: {
+  "sensor.bins_140l_grey_rubbish_bin": { label: "240L wheelie bin" } } });
+eq("override used exactly as written",
+   verbatim._lastModel.groups.find((g) => g.raw === "14/10/2026").bins[0].label,
+   "240L wheelie bin");
 
 /* ------------------------------------------------- glyphs from the icon */
 customElements.define("ha-icon", class {});

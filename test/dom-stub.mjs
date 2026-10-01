@@ -89,7 +89,7 @@ const EXPORTS = [
   "kelvinToCss", "WabitRoomLightsCard", "WabitRoomLightsCardEditor",
   // bin collection card
   "parseDMY", "daysUntil", "relativeDays", "formatBinDate", "DEFAULT_BINS",
-  "discoverBinSensors", "commonWordPrefix",
+  "discoverBinSensors", "commonWordPrefix", "stripBinSize", "applyCase",
   "WabitBinCollectionCard", "WabitBinCollectionCardEditor",
 ];
 

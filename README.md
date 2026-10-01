@@ -53,11 +53,28 @@ icon, so there is nothing to wire up.
 | `type` | string | **required** | `custom:wabit-bin-collection-card` |
 | `entities` | list | – | Specific bin sensors to show. Omit it and they are discovered. |
 | `overrides` | map | – | Per-sensor `{ label, color, icon }` tweaks, keyed by entity id. |
-| `strip_prefix` | boolean | `true` | Trim the prefix shared by every bin's name, so "Bins 240L green garden bin" shows as "240L green garden bin". |
+| `strip_prefix` | boolean | `true` | Trim the prefix shared by every bin's name. |
+| `strip_size` | boolean | `true` | Trim a leading size, so "240L green garden bin" shows as "green garden bin". |
+| `label_case` | `sentence` \| `title` \| `none` | `sentence` | How the tidied name is capitalised. |
 | `title` | string | `Bin Collection` | Card header. Set to `""` for no header. |
 | `show_hero` | boolean | `true` | The large next-collection panel. With it off, every collection becomes a row. |
 | `entity` | entity | – | **Older setups only.** One sensor carrying an object per bin. See below. |
 | `bins` | map | the four below | Labels and colours for `entity` mode only. |
+
+### Tidying the names
+
+The integration names a bin after whatever the council calls it, which is usually more
+than you want on a card. Three steps run in order, each of which can be turned off:
+
+```
+Bins 240L green garden bin     as the sensor reports it
+     240L green garden bin     strip_prefix - drops the prefix shared by every bin
+          green garden bin     strip_size   - drops a leading 240L / 240 litre
+          Green garden bin     label_case   - sentence (default), title, or none
+```
+
+`label_case: title` gives "Green Garden Bin" instead. An explicit `overrides` label is
+used exactly as written and skips all three.
 
 ### Renaming or recolouring a bin
 

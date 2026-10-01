@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.6.0";
+const VERSION = "1.7.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -2403,6 +2403,25 @@ function commonWordPrefix(names) {
   return first.slice(0, i).join(" ");
 }
 
+/**
+ * Drops a leading volume from a bin's name: "240L green garden bin" is a
+ * garden bin whatever size it happens to be. Never returns an empty string.
+ */
+function stripBinSize(name) {
+  const out = String(name)
+    .replace(/^\s*\d+\s*(?:l|ltr|litres?|liters?)\b[\s.\-]*/i, "")
+    .trim();
+  return out || String(name).trim();
+}
+
+/** "green garden bin" -> "Green garden bin" (sentence) or "Green Garden Bin" (title). */
+function applyCase(name, mode) {
+  const s = String(name);
+  if (!s || mode === "none") return s;
+  if (mode === "title") return s.replace(/\b\p{Ll}/gu, (c) => c.toUpperCase());
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 const DEFAULT_BINS = {
   green: { label: "Garden", color: "#3fa34d" },
   grey: { label: "General Waste", color: "#7a7f85" },
@@ -2599,6 +2618,8 @@ class WabitBinCollectionCard extends HTMLElement {
       entities: Array.isArray(cfg.entities) && cfg.entities.length ? cfg.entities : null,
       overrides: cfg.overrides && typeof cfg.overrides === "object" ? cfg.overrides : {},
       strip_prefix: cfg.strip_prefix !== false,
+      strip_size: cfg.strip_size !== false,
+      label_case: ["title", "none"].includes(cfg.label_case) ? cfg.label_case : "sentence",
       title: cfg.title === undefined ? "Bin Collection" : cfg.title,
       bins,
       show_hero: cfg.show_hero !== false,
@@ -2698,6 +2719,9 @@ class WabitBinCollectionCard extends HTMLElement {
         const rest = label.slice(prefix.length).trim();
         if (rest) label = rest;
       }
+      if (cfg.strip_size) label = stripBinSize(label);
+      // An explicit override is used exactly as written; only derived names are tidied.
+      label = applyCase(label, cfg.label_case);
       const date = parseDMY(a.next_collection);
       return {
         key: id,
@@ -2934,6 +2958,8 @@ const BIN_LABELS = {
   title: "Card title (leave empty for no header)",
   show_hero: "Show the next-collection panel",
   strip_prefix: "Trim the shared prefix off each bin's name",
+  strip_size: "Trim the bin size (240L) off each name",
+  label_case: "Capitalisation",
 };
 
 const BIN_SCHEMA = [
@@ -2942,6 +2968,20 @@ const BIN_SCHEMA = [
   { name: "title", selector: { text: {} } },
   { name: "show_hero", selector: { boolean: {} } },
   { name: "strip_prefix", selector: { boolean: {} } },
+  { name: "strip_size", selector: { boolean: {} } },
+  {
+    name: "label_case",
+    selector: {
+      select: {
+        mode: "dropdown",
+        options: [
+          { value: "sentence", label: "Green garden bin" },
+          { value: "title", label: "Green Garden Bin" },
+          { value: "none", label: "green garden bin" },
+        ],
+      },
+    },
+  },
 ];
 
 const BIN_EDITOR_STYLES = `
@@ -3100,6 +3140,10 @@ class WabitBinCollectionCardEditor extends HTMLElement {
       title: this._config.title === undefined ? "Bin Collection" : this._config.title,
       show_hero: this._config.show_hero !== false,
       strip_prefix: this._config.strip_prefix !== false,
+      strip_size: this._config.strip_size !== false,
+      label_case: ["title", "none"].includes(this._config.label_case)
+        ? this._config.label_case
+        : "sentence",
     };
     if (JSON.stringify(this._form.data) !== JSON.stringify(data)) this._form.data = data;
   }
