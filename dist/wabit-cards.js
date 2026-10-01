@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.15.0";
+const VERSION = "1.15.1";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -4691,18 +4691,15 @@ const F1_STYLES = `
   .place { color: var(--wc-muted); font-size: 0.82rem; margin-top: 1px; }
 
   /* ------------------------------------------------------------- the map */
+  /* No min-height: with nothing to show the block collapses rather than
+     leaving an empty panel while the image is on its way. */
   .map {
     margin: 14px 0 2px; border-radius: 14px; background: var(--wc-tonal);
-    min-height: 150px; display: flex; align-items: center; justify-content: center;
+    display: flex; align-items: center; justify-content: center;
     padding: 10px; box-sizing: border-box;
   }
   .map.hidden { display: none; }
   .map img { max-width: 100%; max-height: 230px; display: block; }
-  .map-fallback {
-    text-align: center; color: var(--wc-muted); font-size: 0.8rem;
-    line-height: 1.5; padding: 16px 12px;
-  }
-  .map-fallback .icon { --mdc-icon-size: 30px; display: block; margin: 0 auto 6px; }
 
   /* ----------------------------------------------------------- the strip */
   .strip { display: flex; gap: 10px; margin-top: 14px; }
@@ -4904,36 +4901,23 @@ class WabitF1Card extends HTMLElement {
     return f1OfficialMapUrl(attrs, custom || "f1");
   }
 
+  /**
+   * No map means no block. An empty plate saying so is worse than the space it
+   * occupies, so the whole thing goes - including when the artwork fails to
+   * load, which happens for circuits Formula 1 publishes nothing for.
+   */
   _renderMap(m) {
     const e = this._els;
-    if (!this._config.show_map) {
-      e.map.classList.add("hidden");
-      return;
+    const url = this._config.show_map ? m.mapUrl : null;
+
+    if (url && e.mapImg._src !== url) {
+      e.mapImg._src = url;
+      this._mapFailed = null;
+      e.mapImg.setAttribute("src", url);
+      e.mapImg.setAttribute("alt", `${m.attrs.circuit_name || "Circuit"} layout`);
     }
-    e.map.classList.remove("hidden");
-    const url = m.mapUrl;
-    if (url) {
-      if (e.mapImg._src !== url) {
-        e.mapImg._src = url;
-        this._mapFailed = null;
-        e.mapImg.setAttribute("src", url);
-        e.mapImg.setAttribute("alt", `${m.attrs.circuit_name || "Circuit"} layout`);
-      }
-      const failed = this._mapFailed === url;
-      e.mapImg.style.display = failed ? "none" : "";
-      e.mapFallback.style.display = failed ? "" : "none";
-      if (failed) {
-        const name = m.attrs.circuit_name || "this circuit";
-        e.mapFallbackText.textContent =
-          `Formula 1 publishes no artwork for ${name}. Point \`map_url\` at an ` +
-          "image of your own to show one.";
-      }
-    } else {
-      e.mapImg.style.display = "none";
-      e.mapFallback.style.display = "";
-      e.mapFallbackText.textContent =
-        "Circuit map turned off. Remove `map_url: none` to show it again.";
-    }
+    const show = !!url && this._mapFailed !== url;
+    e.map.classList.toggle("hidden", !show);
   }
 
   _renderStrip(m, locale) {
@@ -5073,12 +5057,7 @@ class WabitF1Card extends HTMLElement {
       this._mapFailed = mapImg._src;
       if (this._lastModel) this._renderMap(this._lastModel);
     });
-    const mapFallback = document.createElement("div");
-    mapFallback.className = "map-fallback";
-    mapFallback.appendChild(this._makeIcon("mdi:map-marker-path"));
-    const mapFallbackText = document.createElement("span");
-    mapFallback.appendChild(mapFallbackText);
-    map.append(mapImg, mapFallback);
+    map.appendChild(mapImg);
     body.appendChild(map);
 
     const strip = document.createElement("div");
@@ -5121,7 +5100,7 @@ class WabitF1Card extends HTMLElement {
 
     this._els = {
       error, head, eyebrow, race, circuit, place,
-      map, mapImg, mapFallback, mapFallbackText,
+      map, mapImg,
       strip, next, nextLabel, nextName, nextWhen, nextCountdown,
       weather, weatherIcon, weatherTemp, weatherSub,
       sessions, sessionRows: [],

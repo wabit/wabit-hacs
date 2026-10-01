@@ -136,7 +136,7 @@ eq("conditions read as words", card._els.weatherSub.textContent,
 eq("defaults to Formula 1's artwork", card._els.mapImg.getAttribute("src"),
    "https://media.formula1.com/image/upload/f_auto,c_limit,q_auto,w_1320/content/dam/" +
    "fom-website/2018-redesign-assets/Circuit%20maps%2016x9/Malaysia_Circuit");
-eq("the map is shown", card._els.mapImg.style.display, "");
+eq("the map block is shown", card._els.map.classList.contains("hidden"), false);
 // Every 2026-path URL checked returns 404 while the legacy ones resolve, so the
 // season must not switch the default over to them.
 eq("a 2026 season still uses the legacy path",
@@ -146,22 +146,34 @@ eq("the modern path can be asked for",
    "https://media.formula1.com/image/upload/c_fit,h_704/q_auto/v1740000001/common/f1/" +
    "2026/track/2026trackmalaysiadetailed.webp");
 
-// Hotlinked artwork can vanish; a broken image must not be what you see.
+// Hotlinked artwork can vanish. Rather than a broken image or a plate saying
+// so, the block goes entirely - there is nothing useful to put in its place.
 card._els.mapImg._handlers.error[0]();
-eq("a failed image falls back", card._els.mapImg.style.display, "none");
-eq("and says which circuit", card._els.mapFallbackText.textContent,
-   "Formula 1 publishes no artwork for Sepang International Circuit. " +
-   "Point `map_url` at an image of your own to show one.");
+eq("a failed image hides the block", card._els.map.classList.contains("hidden"), true);
+eq("the rest of the card is untouched", card._els.race.textContent,
+   "Bahrain Grand Prix in Malaysia");
+eq("the sessions still show", card._els.sessions.classList.contains("hidden"), false);
 
 eq("the map can be opted out of",
-   mk({ map_url: "none" })._els.mapImg.style.display, "none");
+   mk({ map_url: "none" })._els.map.classList.contains("hidden"), true);
+eq("show_map false hides the block",
+   mk({ show_map: false })._els.map.classList.contains("hidden"), true);
+
+// A new circuit must not inherit the previous one's failure.
+card._els.mapImg._src = null;
+card.hass = { ...hass, states: { ...hass.states,
+  "sensor.f1_next_race": { ...hass.states["sensor.f1_next_race"],
+    attributes: { ...RACE_ATTRS, circuit_id: "monza", circuit_name: "Monza" } } } };
+eq("a different circuit tries again", card._els.map.classList.contains("hidden"), false);
+eq("and points at the new artwork",
+   card._els.mapImg.getAttribute("src").includes("Italy_Circuit"), true);
 
 const mapped = mk({ map_url: "/local/circuits/{circuit_id}.png" });
 eq("a template beats the Formula 1 default",
    mapped._els.mapImg.getAttribute("src").includes("media.formula1.com"), false);
 eq("a template gives a map", mapped._els.mapImg.getAttribute("src"),
    "/local/circuits/sepang.png");
-eq("the fallback goes away", mapped._els.mapFallback.style.display, "none");
+eq("the block is shown", mapped._els.map.classList.contains("hidden"), false);
 eq("the map is labelled", mapped._els.mapImg.getAttribute("alt"),
    "Sepang International Circuit layout");
 
@@ -198,7 +210,7 @@ globalThis.Date = class extends RealDate {
 };
 
 /* ------------------------------------------------------------- options */
-eq("map can be hidden", mk({ show_map: false })._els.map.classList.contains("hidden"), true);
+
 eq("weather can be hidden",
    mk({ show_weather: false })._els.weather.classList.contains("hidden"), true);
 eq("sessions can be hidden",

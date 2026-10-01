@@ -71,9 +71,9 @@ corner numbers — nothing to configure. If the integration fills in `circuit_ma
 `circuit_outline_url`, those win.
 
 This hotlinks Formula 1's CDN. It works, but it is someone else's server and nothing
-promises it will keep working, so the card copes when it does not: a circuit F1 publishes
-no artwork for says so in place of the map rather than leaving a broken image. Sepang is
-one such — it has not hosted a race since 2017.
+promises it will keep working, so the card copes when it does not: if the artwork will not
+load, the map block is simply not shown and the rest of the card carries on. Sepang is one
+such circuit — it has not hosted a race since 2017, so F1 publishes nothing for it.
 
 `map_url` overrides it, and is a template: `{circuit_id}`, `{circuit_f1}`,
 `{circuit_f1_lower}`, `{season}` and `{round}` are substituted.
@@ -91,7 +91,7 @@ Two names are understood in place of a template:
 | --- | --- |
 | `f1` | Formula 1's artwork. The default. |
 | `f1-modern` | The path Formula 1 introduced for 2026. Every URL on it returned 404 when checked, which is why the season does not select it automatically. |
-| `none` | No map. |
+| `none` | No map. The block is not shown. |
 
 ## `wabit-media-card`
 
