@@ -68,6 +68,8 @@ customElements.define("ha-card", class extends HTMLElement {
 const ICONS = {
   "mdi:weather-sunset-up":
     "M12 4.5l4 4.2h-2.9v3.1h-2.2V8.7H8l4-4.2zM12 13.4a3.3 3.3 0 013.3 3.3H8.7A3.3 3.3 0 0112 13.4zM2 18.6h20v1.7H2zM4.6 14.2l1.2 1.2-1.2 1.2-1.2-1.2zM19.4 14.2l1.2 1.2-1.2 1.2-1.2-1.2z",
+  "mdi:cog-outline":
+    "M19.4 13a7.9 7.9 0 000-2l2-1.6a.5.5 0 00.1-.6l-1.9-3.3a.5.5 0 00-.6-.2l-2.4 1a7.6 7.6 0 00-1.7-1L14.6 2.6a.5.5 0 00-.5-.4h-3.8a.5.5 0 00-.5.4l-.4 2.6a7.6 7.6 0 00-1.7 1l-2.4-1a.5.5 0 00-.6.2L2.8 8.7a.5.5 0 00.1.6L4.9 11a7.9 7.9 0 000 2l-2 1.6a.5.5 0 00-.1.6l1.9 3.3a.5.5 0 00.6.2l2.4-1a7.6 7.6 0 001.7 1l.4 2.6a.5.5 0 00.5.4h3.8a.5.5 0 00.5-.4l.4-2.6a7.6 7.6 0 001.7-1l2.4 1a.5.5 0 00.6-.2l1.9-3.3a.5.5 0 00-.1-.6zM12 15.5a3.5 3.5 0 110-7 3.5 3.5 0 010 7z",
   "mdi:lightbulb-on-outline":
     "M12 2.5a6.5 6.5 0 00-3.8 11.8c.5.4.8.9.8 1.5v.7c0 .6.4 1 1 1h4c.6 0 1-.4 1-1v-.7c0-.6.3-1.1.8-1.5A6.5 6.5 0 0012 2.5zm0 1.8a4.7 4.7 0 012.7 8.5c-.6.5-1.1 1-1.4 1.7h-2.6c-.3-.7-.8-1.2-1.4-1.7A4.7 4.7 0 0112 4.3zM9.5 19h5c0 .8-.7 1.5-1.5 1.5h-2c-.8 0-1.5-.7-1.5-1.5z",
   "mdi:timer-sand":
@@ -192,7 +194,7 @@ const CONFIG = {
   ],
 };
 
-function mount(paneClass, caption, dark, weekdayTime) {
+function mount(paneClass, caption, dark, weekdayTime, openSettings) {
   const pane = document.createElement("div");
   pane.className = "pane " + paneClass;
   const cap = document.createElement("div");
@@ -204,11 +206,12 @@ function mount(paneClass, caption, dark, weekdayTime) {
   document.body.appendChild(pane);
   card.setConfig(CONFIG);
   card.hass = makeHass(dark, weekdayTime);
+  if (openSettings) card._toggleSettings(true);
 }
 
-// 06:55 start + 5m fade, clock at 06:57 -> mid-fade
-mount("light", "Light theme - fading now", false, "06:55:00");
-// 07:30 start, clock at 06:57 -> upcoming
-mount("dark", "Dark theme - upcoming", true, "07:30:00");
+// 06:55 start + 5m fade, clock at 06:57 -> mid-fade, settings tucked away
+mount("light", "Fading now - settings closed", false, "06:55:00", false);
+// 07:30 start, clock at 06:57 -> upcoming, settings opened
+mount("dark", "Upcoming - settings open", true, "07:30:00", true);
 </script>
 </body></html>

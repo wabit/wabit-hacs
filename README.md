@@ -6,7 +6,7 @@ each time.
 
 | Card | What it does |
 | --- | --- |
-| `wabit-wakeup-card` | Control a sunrise-style wake-up light: set the time per schedule, toggle each schedule on or off, choose which light wakes you, and drag a shared fade length — with a live sunrise ramp while it runs. |
+| `wabit-wakeup-card` | Control a sunrise-style wake-up light: set the time per schedule, toggle each schedule on or off, choose which light wakes you, and drag a shared fade length — with a live sunrise ramp while it runs. Set-once options tuck behind a settings button. |
 
 ![The wakeup card in light and dark Material You themes](https://raw.githubusercontent.com/wabit/wabit-hacs/main/docs/preview.png)
 
@@ -59,6 +59,7 @@ schedules:
 | `light_entity` | entity | – | An `input_text` or `input_select` holding the **entity id of the light** to wake you. Omit it to hide the light row. See below. |
 | `fade_mode` | `start` \| `finish` | `start` | Whether each schedule's time is when the fade *starts* or when the light is *fully on*. See below. |
 | `show_hero` | boolean | `true` | The large next-wakeup panel at the top. |
+| `show_settings` | boolean | `true` | Tuck the light and fade rows behind a settings button in the header. Set `false` to show them inline. |
 | `show_ramp` | boolean | `true` | The sunrise gradient bar. |
 | `icon` | icon | `mdi:weather-sunset-up` | Default icon for schedule rows. |
 
@@ -79,6 +80,16 @@ has to be given explicitly: the card can read your automation's on/off state, bu
 see the weekday condition inside it. Rather than guess and promise a wake-up that never
 fires, the countdown stays hidden until every schedule declares its days. Keep them in step
 with the conditions in your automations.
+
+### The settings button
+
+The light and the fade length are things you set once; the times and the on/off toggles are
+what you touch day to day. So by default the first two collapse behind a gear in the card
+header, leaving the resting card as just the next-wakeup panel and the schedule rows.
+
+Tap the gear to expand them. `show_settings: false` puts them back inline permanently, and
+the gear disappears on its own if neither `light_entity` nor `fade_entity` is configured,
+since there would be nothing behind it.
 
 ### Choosing the light
 

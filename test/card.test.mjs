@@ -157,7 +157,8 @@ card.hass = hass;
 
 eq("built", card._built, true);
 eq("colorScheme dark", card.style.colorScheme, "dark");
-eq("card size", card.getCardSize(), 5);
+// fade is tucked behind the gear, so it does not add to the resting height
+eq("card size", card.getCardSize(), 4);
 
 const rows = card._els.rows;
 eq("row count", rows.length, 2);
@@ -264,7 +265,7 @@ lc.hass = hass;
 
 eq("light row exists", !!lc._els.light, true);
 eq("light picker kind", lc._els.light.kind, "select");
-eq("light card size", lc.getCardSize(), 6);
+eq("light card size", lc.getCardSize(), 4);
 eq("light sub shows state", lc._els.light.sub.textContent, "on - 40%");
 const opts = lc._els.light.picker.children.map((o) => [o.value, o.textContent]);
 eq("light options", opts, [
@@ -355,6 +356,79 @@ throws("bad light helper domain",
 
 eq("stub picks up light helper",
    T.WabitWakeupCard.getStubConfig(hass).light_entity, "input_text.bedroom_wakeup_light");
+
+
+/* ----------------------------------------------------- settings button */
+const sc = new T.WabitWakeupCard();
+sc.setConfig(withLight());
+sc.hass = hass;
+
+const scCard = sc.shadowRoot.children.find((e) => e.tagName === "ha-card");
+const scHeader = scCard.children.find((e) => e.classList.contains("header"));
+eq("header rendered by the card", !!scHeader, true);
+eq("title not left to ha-card", scCard.getAttribute("header"), undefined);
+eq("title text", scHeader.children[0].textContent, "Bedroom Wakeup");
+
+const scGear = scHeader.children.find((e) => e.classList.contains("gear"));
+eq("gear present", !!scGear, true);
+eq("gear starts collapsed", scGear.getAttribute("aria-expanded"), "false");
+eq("panel starts collapsed", sc._els.settings.panel.classList.contains("open"), false);
+
+// The configuration rows live inside the panel, not loose in the body.
+const scBody = scCard.children.find((e) => e.classList.contains("body"));
+const inPanel = (el) => {
+  const inner = sc._els.settings.panel.children[0];
+  return inner.children.includes(el);
+};
+eq("light row is in the panel", inPanel(sc._els.light.row), true);
+eq("fade row is in the panel", inPanel(sc._els.fade.row), true);
+eq("schedule rows stay in the body", scBody.children.includes(sc._els.rows[0].row), true);
+
+// Toggling.
+scGear._fire("click");
+eq("gear opens panel", sc._els.settings.panel.classList.contains("open"), true);
+eq("gear marked expanded", scGear.getAttribute("aria-expanded"), "true");
+eq("gear gets open styling", scGear.classList.contains("open"), true);
+scGear._fire("click");
+eq("gear closes panel", sc._els.settings.panel.classList.contains("open"), false);
+eq("gear marked collapsed", scGear.getAttribute("aria-expanded"), "false");
+
+// Opening the panel must not disturb the controls inside it.
+scGear._fire("click");
+eq("fade still usable when open", sc._els.fade.slider.value, "5");
+eq("light still usable when open", sc._els.light.picker.value, "light.bedroom_ceiling_light");
+
+// show_settings: false puts everything back inline.
+const sc2 = new T.WabitWakeupCard();
+sc2.setConfig(withLight({ show_settings: false }));
+sc2.hass = hass;
+eq("no panel when disabled", sc2._els.settings, null);
+eq("inline card size", sc2.getCardSize(), 6);
+const sc2Card = sc2.shadowRoot.children.find((e) => e.tagName === "ha-card");
+const sc2Header = sc2Card.children.find((e) => e.classList.contains("header"));
+eq("no gear when disabled", sc2Header.children.some((e) => e.classList.contains("gear")), false);
+const sc2Body = sc2Card.children.find((e) => e.classList.contains("body"));
+eq("light row inline", sc2Body.children.includes(sc2._els.light.row), true);
+
+// Nothing to configure -> no gear, even with settings enabled.
+const sc3 = new T.WabitWakeupCard();
+sc3.setConfig({ title: "Bare", schedules: [{ name: "X", time: "input_datetime.bedroom_weekday_wakeup_time" }] });
+sc3.hass = hass;
+eq("no gear with nothing to tuck", sc3._els.settings, null);
+const sc3Header = sc3.shadowRoot.children
+  .find((e) => e.tagName === "ha-card").children.find((e) => e.classList.contains("header"));
+eq("header still shows title", sc3Header.children[0].textContent, "Bare");
+eq("no gear rendered", sc3Header.children.some((e) => e.classList.contains("gear")), false);
+
+// No title but settings available -> header exists just for the gear.
+const sc4 = new T.WabitWakeupCard();
+sc4.setConfig(withLight({ title: "" }));
+sc4.hass = hass;
+const sc4Header = sc4.shadowRoot.children
+  .find((e) => e.tagName === "ha-card").children.find((e) => e.classList.contains("header"));
+eq("headerless title still gets a gear", !!sc4Header, true);
+eq("empty title text", sc4Header.children[0].textContent, "");
+eq("gear present without title", sc4Header.children.some((e) => e.classList.contains("gear")), true);
 
 /* ---------------------------------- live fade, with the clock pinned */
 const RealDate = Date;

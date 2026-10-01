@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const REPO = "https://github.com/wabit/wabit-hacs";
 
 console.info(
@@ -124,6 +124,41 @@ const STYLES = `
   }
 
   ha-card { overflow: hidden; }
+
+  /* Mirrors Home Assistant's own .card-header so the title still looks native
+     even though we render it ourselves to fit the settings button alongside. */
+  .header { display: flex; align-items: center; gap: 8px; padding: 12px 16px 8px; }
+  .title {
+    flex: 1; min-width: 0;
+    color: var(--ha-card-header-color, var(--wc-text));
+    font-family: var(--ha-card-header-font-family, inherit);
+    font-size: var(--ha-card-header-font-size, 24px);
+    font-weight: 400; letter-spacing: -0.012em; line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .gear {
+    flex: none; display: flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; padding: 0; border: none; border-radius: 50%;
+    background: none; cursor: pointer; color: var(--wc-muted);
+    transition: background 160ms, color 160ms;
+  }
+  .gear:hover { background: var(--wc-tonal); color: var(--wc-text); }
+  .gear:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: 2px; }
+  /* A filled tonal background, not a rotation: a gear glyph is rotationally
+     symmetric, so turning it reads as no change at all. */
+  .gear.open { background: var(--wc-accent-tonal); color: var(--wc-on-accent-tonal); }
+  .gear .icon { color: inherit; --mdc-icon-size: 21px; }
+
+  /* 0fr -> 1fr animates to the content's real height, unlike a guessed max-height. */
+  .settings { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 260ms ease; }
+  .settings.open { grid-template-rows: 1fr; }
+  .settings-inner { overflow: hidden; min-height: 0; }
+  .settings-inner .row:first-of-type {
+    border-top: 1px solid var(--wc-outline); padding-top: 10px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .settings { transition: none; }
+  }
 
   .body { display: flex; flex-direction: column; padding: 16px; }
   .body.tight { padding-top: 6px; }
@@ -326,6 +361,7 @@ class WabitWakeupCard extends HTMLElement {
       light_entity: isUnset(cfg.light_entity) ? null : cfg.light_entity,
       fade_mode: cfg.fade_mode === "finish" ? "finish" : "start",
       show_hero: cfg.show_hero !== false,
+      show_settings: cfg.show_settings !== false,
       show_ramp: cfg.show_ramp !== false,
       icon: cfg.icon || "mdi:weather-sunset-up",
       schedules: raw.map((s) => ({
@@ -366,11 +402,14 @@ class WabitWakeupCard extends HTMLElement {
 
   getCardSize() {
     if (!this._config) return 4;
+    const extras =
+      (this._config.light_entity ? 1 : 0) + (this._config.fade_entity ? 1 : 0);
+    // Settings start collapsed, so they do not contribute to the resting height.
+    const tucked = this._config.show_settings && extras > 0;
     return (
       (this._config.show_hero ? 2 : 0) +
       this._config.schedules.length +
-      (this._config.light_entity ? 1 : 0) +
-      (this._config.fade_entity ? 1 : 0)
+      (tucked ? 0 : extras)
     );
   }
 
@@ -418,6 +457,27 @@ class WabitWakeupCard extends HTMLElement {
     return { el, kind: "select" };
   }
 
+  _makeSettingsButton() {
+    const btn = document.createElement("button");
+    btn.className = "gear";
+    btn.type = "button";
+    btn.setAttribute("aria-label", "Settings");
+    btn.setAttribute("aria-expanded", "false");
+    btn.appendChild(this._makeIcon("mdi:cog-outline"));
+    btn.addEventListener("click", () => this._toggleSettings());
+    return btn;
+  }
+
+  _toggleSettings(force) {
+    if (!this._els || !this._els.settings) return;
+    const open = force === undefined ? !this._settingsOpen : !!force;
+    this._settingsOpen = open;
+    const { panel, button } = this._els.settings;
+    panel.classList.toggle("open", open);
+    button.classList.toggle("open", open);
+    button.setAttribute("aria-expanded", String(open));
+  }
+
   _build() {
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     const root = this.shadowRoot;
@@ -428,14 +488,33 @@ class WabitWakeupCard extends HTMLElement {
     root.appendChild(style);
 
     const card = document.createElement("ha-card");
-    if (this._config.title) card.setAttribute("header", this._config.title);
     root.appendChild(card);
 
-    const body = document.createElement("div");
-    body.className = this._config.title ? "body tight" : "body";
-    card.appendChild(body);
+    this._els = { hero: null, rows: [], light: null, fade: null, settings: null };
 
-    this._els = { hero: null, rows: [], light: null, fade: null };
+    // Only worth a settings button if there is actually something to put in it.
+    const tuck =
+      this._config.show_settings &&
+      !!(this._config.light_entity || this._config.fade_entity);
+
+    let gear = null;
+    if (this._config.title || tuck) {
+      const header = document.createElement("div");
+      header.className = "header";
+      const title = document.createElement("div");
+      title.className = "title";
+      title.textContent = this._config.title || "";
+      header.appendChild(title);
+      if (tuck) {
+        gear = this._makeSettingsButton();
+        header.appendChild(gear);
+      }
+      card.appendChild(header);
+    }
+
+    const body = document.createElement("div");
+    body.className = this._config.title || tuck ? "body tight" : "body";
+    card.appendChild(body);
 
     if (this._config.show_hero) {
       const hero = document.createElement("div");
@@ -517,6 +596,21 @@ class WabitWakeupCard extends HTMLElement {
       this._els.rows.push({ sched, row, sub, timeInput, toggle });
     });
 
+    // Everything below here is configuration rather than daily use, so it lives
+    // behind the gear unless show_settings is off.
+    let host = body;
+    if (tuck) {
+      const panel = document.createElement("div");
+      panel.className = "settings";
+      const inner = document.createElement("div");
+      inner.className = "settings-inner";
+      panel.appendChild(inner);
+      body.appendChild(panel);
+      this._els.settings = { panel, button: gear };
+      this._settingsOpen = false;
+      host = inner;
+    }
+
     if (this._config.light_entity) {
       const row = document.createElement("div");
       row.className = "row light-row";
@@ -535,7 +629,7 @@ class WabitWakeupCard extends HTMLElement {
       const { el, kind } = this._makeLightPicker();
 
       row.append(icon, label, el);
-      body.appendChild(row);
+      host.appendChild(row);
       this._els.light = { row, sub, picker: el, kind };
     }
 
@@ -567,7 +661,7 @@ class WabitWakeupCard extends HTMLElement {
       slider.addEventListener("change", () => this._onFadeChange(slider));
 
       row.append(icon, label, slider, value);
-      body.appendChild(row);
+      host.appendChild(row);
       this._els.fade = { row, slider, value, sub };
     }
 
@@ -848,6 +942,7 @@ const LABELS = {
   light_entity: "Light chooser helper (input_text or input_select holding the light's entity_id)",
   fade_mode: "What the time means",
   show_hero: "Show the big next-wakeup panel",
+  show_settings: "Tuck the light and fade rows behind a settings button",
   show_ramp: "Show the sunrise bar",
   name: "Label",
   time: "Time helper (input_datetime)",
@@ -876,6 +971,7 @@ const MAIN_SCHEMA = [
     },
   },
   { name: "show_hero", selector: { boolean: {} } },
+  { name: "show_settings", selector: { boolean: {} } },
   { name: "show_ramp", selector: { boolean: {} } },
 ];
 
@@ -1060,6 +1156,7 @@ class WabitWakeupCardEditor extends HTMLElement {
       light_entity: this._config.light_entity,
       fade_mode: this._config.fade_mode === "finish" ? "finish" : "start",
       show_hero: this._config.show_hero !== false,
+      show_settings: this._config.show_settings !== false,
       show_ramp: this._config.show_ramp !== false,
     };
     this._forms.main.hass = this._hass;
