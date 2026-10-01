@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.14.0";
+const VERSION = "1.15.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -4561,15 +4561,42 @@ function findF1WeatherEntity(hass) {
   );
 }
 
-/** Fills {circuit_id}, {circuit_f1}, {season}, {round} in a URL template. */
+/**
+ * Formula 1's own circuit artwork. It moved for the 2026 season, so which one
+ * applies depends on the year being shown.
+ */
+const F1_MAP_PRESETS = {
+  modern:
+    "https://media.formula1.com/image/upload/c_fit,h_704/q_auto/v1740000001/" +
+    "common/f1/{season}/track/{season}track{circuit_f1_lower}detailed.webp",
+  legacy:
+    "https://media.formula1.com/image/upload/f_auto,c_limit,q_auto,w_1320/" +
+    "content/dam/fom-website/2018-redesign-assets/Circuit%20maps%2016x9/{circuit_f1}_Circuit",
+};
+
+/** Fills {circuit_id}, {circuit_f1}, {circuit_f1_lower}, {season}, {round}. */
 function f1MapUrl(template, attrs) {
   if (!template) return null;
   const slug = F1_CIRCUIT_SLUGS[attrs.circuit_id] || attrs.circuit_id || "";
   return String(template)
     .replace(/\{circuit_id\}/g, attrs.circuit_id || "")
+    .replace(/\{circuit_f1_lower\}/g, slug.toLowerCase())
     .replace(/\{circuit_f1\}/g, slug)
     .replace(/\{season\}/g, attrs.season || "")
     .replace(/\{round\}/g, attrs.round || "");
+}
+
+/**
+ * The Formula 1 artwork URL for a given race.
+ *
+ * The legacy path is the default whatever the season. Other cards switch to
+ * the 2026 path for 2026 onwards, but every 2026 URL checked returns 404 while
+ * the legacy ones resolve, so switching on the year would lose the artwork
+ * rather than gain it. `f1-modern` is there for when those paths go live.
+ */
+function f1OfficialMapUrl(attrs, which) {
+  const preset = which === "f1-modern" ? F1_MAP_PRESETS.modern : F1_MAP_PRESETS.legacy;
+  return f1MapUrl(preset, attrs);
 }
 
 /** Whole minutes until `date`, or null. */
@@ -4743,7 +4770,12 @@ class WabitF1Card extends HTMLElement {
     this._config = {
       entity: isUnset(cfg.entity) ? null : cfg.entity,
       weather_entity: isUnset(cfg.weather_entity) ? null : cfg.weather_entity,
-      map_url: isUnset(cfg.map_url) ? null : String(cfg.map_url),
+      // Not isUnset(): that treats the literal string "none" as absent, which
+      // is exactly the value used to turn the map off.
+      map_url:
+        cfg.map_url === undefined || cfg.map_url === null || cfg.map_url === ""
+          ? null
+          : String(cfg.map_url),
       title: cfg.title,
       show_map: cfg.show_map !== false,
       show_weather: cfg.show_weather !== false,
@@ -4820,8 +4852,7 @@ class WabitF1Card extends HTMLElement {
       next,
       race,
       weather,
-      mapUrl:
-        f1MapUrl(cfg.map_url, a) || a.circuit_map_url || a.circuit_outline_url || null,
+      mapUrl: this._mapUrlFor(a),
     };
   }
 
@@ -4859,6 +4890,20 @@ class WabitF1Card extends HTMLElement {
     this._renderSessions(m, locale);
   }
 
+  /**
+   * An explicit template wins, then whatever the integration supplies, then
+   * Formula 1's own artwork. `map_url: none` opts out entirely.
+   */
+  _mapUrlFor(attrs) {
+    const custom = this._config.map_url;
+    if (custom === "none") return null;
+    const named = ["f1", "f1-legacy", "f1-modern"].includes(custom);
+    if (custom && !named) return f1MapUrl(custom, attrs);
+    if (attrs.circuit_map_url) return attrs.circuit_map_url;
+    if (attrs.circuit_outline_url) return attrs.circuit_outline_url;
+    return f1OfficialMapUrl(attrs, custom || "f1");
+  }
+
   _renderMap(m) {
     const e = this._els;
     if (!this._config.show_map) {
@@ -4870,16 +4915,24 @@ class WabitF1Card extends HTMLElement {
     if (url) {
       if (e.mapImg._src !== url) {
         e.mapImg._src = url;
+        this._mapFailed = null;
         e.mapImg.setAttribute("src", url);
         e.mapImg.setAttribute("alt", `${m.attrs.circuit_name || "Circuit"} layout`);
       }
-      e.mapImg.style.display = "";
-      e.mapFallback.style.display = "none";
+      const failed = this._mapFailed === url;
+      e.mapImg.style.display = failed ? "none" : "";
+      e.mapFallback.style.display = failed ? "" : "none";
+      if (failed) {
+        const name = m.attrs.circuit_name || "this circuit";
+        e.mapFallbackText.textContent =
+          `Formula 1 publishes no artwork for ${name}. Point \`map_url\` at an ` +
+          "image of your own to show one.";
+      }
     } else {
       e.mapImg.style.display = "none";
       e.mapFallback.style.display = "";
       e.mapFallbackText.textContent =
-        "No circuit map configured. Set `map_url` to point at one - the README has recipes.";
+        "Circuit map turned off. Remove `map_url: none` to show it again.";
     }
   }
 
@@ -5014,6 +5067,12 @@ class WabitF1Card extends HTMLElement {
     map.className = "map";
     const mapImg = document.createElement("img");
     mapImg.setAttribute("loading", "lazy");
+    // The artwork is fetched from Formula 1 unless pointed elsewhere, so a
+    // missing image has to degrade rather than leave a broken-image icon.
+    mapImg.addEventListener("error", () => {
+      this._mapFailed = mapImg._src;
+      if (this._lastModel) this._renderMap(this._lastModel);
+    });
     const mapFallback = document.createElement("div");
     mapFallback.className = "map-fallback";
     mapFallback.appendChild(this._makeIcon("mdi:map-marker-path"));

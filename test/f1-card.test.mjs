@@ -132,12 +132,33 @@ eq("temperature", card._els.weatherTemp.textContent, "25°C");
 eq("conditions read as words", card._els.weatherSub.textContent,
    "Cloudy · 99% humidity · 1 km/h wind");
 
-/* the map */
-eq("no map configured shows the fallback", card._els.mapImg.style.display, "none");
-eq("fallback explains itself",
-   card._els.mapFallbackText.textContent.includes("No circuit map configured"), true);
+/* the map: Formula 1's own artwork, with no configuration */
+eq("defaults to Formula 1's artwork", card._els.mapImg.getAttribute("src"),
+   "https://media.formula1.com/image/upload/f_auto,c_limit,q_auto,w_1320/content/dam/" +
+   "fom-website/2018-redesign-assets/Circuit%20maps%2016x9/Malaysia_Circuit");
+eq("the map is shown", card._els.mapImg.style.display, "");
+// Every 2026-path URL checked returns 404 while the legacy ones resolve, so the
+// season must not switch the default over to them.
+eq("a 2026 season still uses the legacy path",
+   card._els.mapImg.getAttribute("src").includes("2018-redesign-assets"), true);
+eq("the modern path can be asked for",
+   mk({ map_url: "f1-modern" })._els.mapImg.getAttribute("src"),
+   "https://media.formula1.com/image/upload/c_fit,h_704/q_auto/v1740000001/common/f1/" +
+   "2026/track/2026trackmalaysiadetailed.webp");
+
+// Hotlinked artwork can vanish; a broken image must not be what you see.
+card._els.mapImg._handlers.error[0]();
+eq("a failed image falls back", card._els.mapImg.style.display, "none");
+eq("and says which circuit", card._els.mapFallbackText.textContent,
+   "Formula 1 publishes no artwork for Sepang International Circuit. " +
+   "Point `map_url` at an image of your own to show one.");
+
+eq("the map can be opted out of",
+   mk({ map_url: "none" })._els.mapImg.style.display, "none");
 
 const mapped = mk({ map_url: "/local/circuits/{circuit_id}.png" });
+eq("a template beats the Formula 1 default",
+   mapped._els.mapImg.getAttribute("src").includes("media.formula1.com"), false);
 eq("a template gives a map", mapped._els.mapImg.getAttribute("src"),
    "/local/circuits/sepang.png");
 eq("the fallback goes away", mapped._els.mapFallback.style.display, "none");

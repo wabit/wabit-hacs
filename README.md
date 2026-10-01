@@ -66,31 +66,32 @@ for the track's.
 
 ### The circuit map
 
-The integration has `circuit_map_url` and `circuit_outline_url` attributes and the card
-uses them when they are filled in. They are often empty, so `map_url` says where else to
-look. It is a template: `{circuit_id}`, `{circuit_f1}`, `{season}` and `{round}` are
-substituted.
+Formula 1's own circuit artwork is used by default, with its sectors, DRS zones and
+corner numbers — nothing to configure. If the integration fills in `circuit_map_url` or
+`circuit_outline_url`, those win.
 
-Images of your own, which is the option that will not break:
+This hotlinks Formula 1's CDN. It works, but it is someone else's server and nothing
+promises it will keep working, so the card copes when it does not: a circuit F1 publishes
+no artwork for says so in place of the map rather than leaving a broken image. Sepang is
+one such — it has not hosted a race since 2017.
+
+`map_url` overrides it, and is a template: `{circuit_id}`, `{circuit_f1}`,
+`{circuit_f1_lower}`, `{season}` and `{round}` are substituted.
 
 ```yaml
 map_url: /local/circuits/{circuit_id}.png
 ```
 
-Drop a file per circuit into `config/www/circuits/` named after its id — `sepang.png`,
-`silverstone.png` — and each race picks up its own.
+Drop a file per circuit into `config/www/circuits/` named after its id — `bahrain.png`,
+`silverstone.png` — and each race picks up its own. Nothing to break.
 
-Formula 1's own artwork, which other cards use:
+Two names are understood in place of a template:
 
-```yaml
-map_url: https://media.formula1.com/image/upload/f_auto,c_limit,q_auto,w_1320/content/dam/fom-website/2018-redesign-assets/Circuit%20maps%2016x9/{circuit_f1}_Circuit
-```
-
-`{circuit_f1}` translates the circuit id into the name Formula 1 files that artwork under
-— `sepang` becomes `Malaysia`. This is hotlinking someone else's CDN: it works today, it
-is not promised to keep working, and it is not the default for that reason.
-
-With neither, the card says so in place of the map rather than showing a broken image.
+| Value | Meaning |
+| --- | --- |
+| `f1` | Formula 1's artwork. The default. |
+| `f1-modern` | The path Formula 1 introduced for 2026. Every URL on it returned 404 when checked, which is why the season does not select it automatically. |
+| `none` | No map. |
 
 ## `wabit-media-card`
 

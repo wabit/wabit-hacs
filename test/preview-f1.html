@@ -162,9 +162,9 @@ globalThis.Date = class extends Real {
 
 const RACE = {
   season: "2026", round: "16",
-  race_name: "Bahrain Grand Prix in Malaysia",
-  circuit_id: "sepang", circuit_name: "Sepang International Circuit",
-  circuit_locality: "Kuala Lumpur", circuit_country: "Malaysia",
+  race_name: "Bahrain Grand Prix",
+  circuit_id: "bahrain", circuit_name: "Bahrain International Circuit",
+  circuit_locality: "Sakhir", circuit_country: "Bahrain",
   race_start_utc: "2026-10-04T07:00:00+00:00",
   first_practice_start_utc: "2026-10-02T04:30:00+00:00",
   second_practice_start_utc: "2026-10-02T08:00:00+00:00",
@@ -181,8 +181,8 @@ function makeHass(dark) {
       "sensor.f1_next_race": { state: RACE.race_start_utc, attributes: RACE },
       "weather.f1_weather": { state: "cloudy", attributes: {
         temperature: 25, temperature_unit: "\u00b0C", humidity: 99,
-        wind_speed: 1.26, wind_speed_unit: "km/h", circuit_id: "sepang",
-        friendly_name: "Sepang International Circuit \u00b7 Kuala Lumpur" } },
+        wind_speed: 1.26, wind_speed_unit: "km/h", circuit_id: "bahrain",
+        friendly_name: "Bahrain International Circuit \u00b7 Sakhir" } },
     },
     callService: () => {},
   };
@@ -198,7 +198,7 @@ function mount(paneClass, caption, dark) {
   const card = document.createElement("wabit-f1-card");
   pane.appendChild(card);
   document.body.appendChild(pane);
-  card.setConfig({ map_url: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 210' width='400' height='210'%3E%3Cpath d='M40 150 C40 80 92 40 160 40 L300 40 C352 40 372 72 350 100 L302 130 C282 146 292 170 322 176 L350 182 C376 188 374 208 344 203 L92 190 C52 184 40 176 40 150 Z' fill='none' stroke='%23888' stroke-width='11' stroke-linejoin='round'/%3E%3Cpath d='M150 41 l0 -14' stroke='%23e10600' stroke-width='7'/%3E%3C/svg%3E" });
+  card.setConfig({});   // no map_url: the Formula 1 default applies
   card.hass = makeHass(dark);
 }
 
