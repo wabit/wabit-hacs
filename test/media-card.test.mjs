@@ -592,5 +592,43 @@ eq("empty state explained",
    ed._els.list.children[0].classList.contains("empty-pins"), true);
 delete customElements._d["ha-form"];
 
+
+/* ---------------------------------------- typing must not steal focus ----
+   Lovelace echoes every config-changed straight back through setConfig. Without
+   simulating that round trip a rebuild-on-echo is invisible to the tests, which
+   is exactly how this shipped: the rebuild key included the preset name, so each
+   keystroke rebuilt the rows and threw focus out of the field. */
+customElements.define("ha-form", class {});
+const typed = new T.WabitMediaCardEditor();
+typed.addEventListener("config-changed", (ev) => typed.setConfig(ev.detail.config));
+typed.setConfig({ area: "living_room", presets: PRESETS });
+typed.hass = hass;
+
+const formBefore = typed._presetForms[0];
+const rowsBefore = typed._els.list.children.filter((c) => c.classList.contains("block"));
+const emit = (value) =>
+  formBefore._handlers["value-changed"][0]({ stopPropagation() {}, detail: { value } });
+
+// One event per character, as a text field actually produces.
+"Jazz FM".split("").reduce((acc, ch) => {
+  const next = acc + ch;
+  emit({ name: next, entity: PRESETS[0].entity, image: PRESETS[0].image });
+  return next;
+}, "");
+
+eq("the form element survives typing", typed._presetForms[0] === formBefore, true);
+eq("the rows are not rebuilt", typed._els.list.children
+   .filter((c) => c.classList.contains("block"))
+   .every((r, i) => r === rowsBefore[i]), true);
+eq("still two presets", typed._presets().length, 2);
+eq("the typed name landed", typed._presets()[0].name, "Jazz FM");
+eq("the other preset is untouched", typed._presets()[1].name, "Def Con Radio");
+
+// Structural changes must still rebuild, echo or not.
+typed._addPreset();
+eq("adding does rebuild", typed._els.list.children
+   .filter((c) => c.classList.contains("block")).length, 3);
+delete customElements._d["ha-form"];
+
 globalThis.Date = RealDate;
 done("media");

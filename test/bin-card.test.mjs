@@ -394,4 +394,23 @@ eq("colour edit leaves other bins alone", emitted.at(-1).bins.green.label, "Gard
 delete customElements._d["ha-form"];
 
 globalThis.Date = RealDate;
+
+/* ---------------------------------------- typing must not steal focus ---- */
+customElements.define("ha-form", class {});
+const typing = new T.WabitBinCollectionCardEditor();
+typing.addEventListener("config-changed", (ev) => typing.setConfig(ev.detail.config));
+typing.setConfig({ entity: "sensor.bin_collection" });
+typing.hass = hass;
+
+const labelInput = typing._els.list.children[0].children[1];
+const rowsWere = typing._els.list.children.slice();
+labelInput.value = "Garden waste";
+labelInput._fire("change");
+eq("the label field survives an edit",
+   typing._els.list.children[0].children[1] === labelInput, true);
+eq("the rows are not rebuilt",
+   typing._els.list.children.every((r, i) => r === rowsWere[i]), true);
+eq("the edit still landed", typing._config.bins.green.label, "Garden waste");
+delete customElements._d["ha-form"];
+
 done("bin-collection");

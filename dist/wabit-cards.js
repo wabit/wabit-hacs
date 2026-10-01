@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.13.1";
+const VERSION = "1.13.2";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -3187,6 +3187,11 @@ class WabitBinCollectionCardEditor extends HTMLElement {
     // The per-bin labels and colours only mean anything in single-sensor mode.
     const legacy = !!this._config.entity;
     this._els.section.style.display = legacy ? "" : "none";
+    // Keyed on which bins exist, not on their labels: rebuilding these rows
+    // while someone is editing a label would throw focus out of the field.
+    const key = legacy ? Object.keys(this._config.bins).join("|") : "";
+    if (key === this._binKey) return;
+    this._binKey = key;
     const list = this._els.list;
     list.innerHTML = "";
     if (!legacy) return;
@@ -4356,9 +4361,11 @@ class WabitMediaCardEditor extends HTMLElement {
   _renderPresets(force) {
     if (!this._built || !this._els) return;
     const presets = this._presets();
-    // ha-form owns its own fields, so rows only need rebuilding when the list
-    // itself changes - not on every keystroke.
-    const key = JSON.stringify(presets.map((p) => p && p.name));
+    // Keyed on how many presets there are, never on their contents. Keying on
+    // the name meant every keystroke changed the key, rebuilt the rows and
+    // threw focus out of the field being typed in. Adding, removing and
+    // reordering all rebuild explicitly with `force`, so length is enough.
+    const key = presets.length;
     if (!force && key === this._presetKey) return;
     this._presetKey = key;
 
