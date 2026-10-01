@@ -21,12 +21,7 @@ function mkEl(tag) {
     title: "",
     // Plain property assignment (el.style.display = ...) and setProperty for
     // custom properties both have to work.
-    style: {
-      _props: {},
-      setProperty(k, v) { this._props[k] = v; },
-      removeProperty(k) { delete this._props[k]; },
-      getPropertyValue(k) { return this._props[k] === undefined ? "" : this._props[k]; },
-    },
+    style: mkStyle(),
     attrs: {},
     get className() { return [...classes].join(" "); },
     set className(v) {
@@ -66,8 +61,16 @@ function mkShadow() {
   return root;
 }
 
+const mkStyle = () => ({
+  _props: {},
+  setProperty(k, v) { this._props[k] = v; },
+  removeProperty(k) { delete this._props[k]; },
+  getPropertyValue(k) { return this._props[k] === undefined ? "" : this._props[k]; },
+});
+
 globalThis.HTMLElement = class {
-  constructor() { this.style = {}; this.shadowRoot = null; this._handlers = {}; }
+  // Same style shape as a created element: the host gets custom properties too.
+  constructor() { this.style = mkStyle(); this.shadowRoot = null; this._handlers = {}; }
   attachShadow() { this.shadowRoot = mkShadow(); return this.shadowRoot; }
   addEventListener(t, fn) { (this._handlers[t] = this._handlers[t] || []).push(fn); }
   dispatchEvent(ev) { (this._handlers[ev.type] || []).forEach((fn) => fn(ev)); return true; }

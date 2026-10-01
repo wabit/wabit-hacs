@@ -346,7 +346,8 @@ eq("art_backdrop false does not wash",
 const washed = mk({ area: "living_room", artwork: "tile" });
 eq("wash on when there is artwork", washed._els.stage.classList.contains("washed"), true);
 eq("wash carries the image",
-   washed._els.stage.style._props["--art"].includes("media_player_proxy"), true);
+   washed.style._props["--art"].includes("media_player_proxy"), true);
+eq("the body below shares the tint", washed._els.body.classList.contains("tinted"), true);
 const noWash = mk({ area: "living_room", artwork: "tile", art_backdrop: false });
 eq("wash can be turned off", noWash._els.stage.classList.contains("washed"), false);
 const noArt = mk({ area: "office", artwork: "tile" });

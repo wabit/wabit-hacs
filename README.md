@@ -86,8 +86,12 @@ artwork: cover   # the default
 ```
 
 - **`cover`** — the artwork *is* the panel. It bleeds to the card edges with the title,
-  progress and controls laid over it, behind a scrim that keeps text readable over any
-  image. The same idea as Home Assistant's own media control card.
+  progress and controls laid over it. The same idea as Home Assistant's own media control
+  card. The scrim never thins out completely and every piece of text carries a shadow, so
+  a white album cover or a bright still reads as well as a dark one. The content spreads
+  top to bottom rather than hugging the controls, and the area below the panel picks up
+  the artwork's colour so the presets and player list belong to the same card rather than
+  sitting on a separate white block.
 - **`tile`** — a thumbnail beside the text, with the artwork repeated behind the panel
   blurred and dimmed so the card picks up the album's colours. `art_backdrop: false`
   drops that wash.

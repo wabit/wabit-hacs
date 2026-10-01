@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.11.0";
+const VERSION = "1.12.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -3365,8 +3365,19 @@ const MEDIA_STYLES = `
     font-weight: 400; letter-spacing: -0.012em; line-height: 1.25;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .body { padding: 12px 16px 16px; }
+  .body { padding: 12px 16px 16px; position: relative; }
   .body.tight { padding-top: 4px; }
+  /* The presets and the player list sat on bare card, which read as a separate
+     block bolted under the artwork. They now share the album's colour. */
+  .body-wash {
+    position: absolute; inset: 0; z-index: 0; pointer-events: none;
+    background: var(--art) center/cover no-repeat;
+    filter: blur(44px) saturate(1.5);
+    opacity: 0; transition: opacity 500ms ease;
+  }
+  .body.tinted .body-wash { opacity: 0.18; }
+  .body > *:not(.body-wash) { position: relative; z-index: 1; }
+  @media (prefers-reduced-motion: reduce) { .body-wash { transition: none; } }
 
   /* ------------------------------------------------------------- now playing */
   .stage { position: relative; }
@@ -3392,30 +3403,46 @@ const MEDIA_STYLES = `
      and controls laid over it - the same idea as Home Assistant's own media
      control card. A scrim keeps text readable over any image. */
   .stage.cover {
-    margin: -4px -16px 0; min-height: 232px;
-    display: flex; align-items: flex-end;
+    margin: -4px -16px 0; min-height: 268px;
+    display: flex; align-items: stretch;
     background: var(--art) center/cover no-repeat;
   }
+  /* The scrim never thins out completely. Text sits near the top of the panel,
+     where a bottom-weighted gradient leaves nothing, so a bright image would
+     make the title unreadable. It stays dark enough everywhere for white text,
+     and darkens further behind the controls. */
   .stage.cover .wash {
     inset: 0; opacity: 1; filter: none;
     background: linear-gradient(to top,
-      rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.66) 34%,
-      rgba(0, 0, 0, 0.26) 64%, rgba(0, 0, 0, 0.04) 100%);
+      rgba(0, 0, 0, 0.92) 0%, rgba(0, 0, 0, 0.74) 30%,
+      rgba(0, 0, 0, 0.56) 62%, rgba(0, 0, 0, 0.44) 100%);
     -webkit-mask-image: none; mask-image: none;
   }
-  .stage.cover .stage-body { width: 100%; padding: 16px; }
+  /* Spread top to bottom so the title uses the space rather than hugging the
+     controls and leaving a dead band of image above it. */
+  .stage.cover .stage-body {
+    width: 100%; padding: 18px 16px 16px;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .stage.cover .now { flex: 0 0 auto; }
+  .stage.cover .progress { margin-top: auto; padding-top: 14px; }
   .stage.cover .art { display: none; }
   .stage.cover .meta { padding-top: 0; }
-  .stage.cover .eyebrow { color: rgba(255, 255, 255, 0.76); }
-  .stage.cover .track {
-    color: #fff; font-size: 1.45rem; font-weight: 500;
-    text-shadow: 0 1px 10px rgba(0, 0, 0, 0.45);
-  }
-  .stage.cover .sub { color: rgba(255, 255, 255, 0.88); font-size: 0.9rem; }
-  .stage.cover .where { color: rgba(255, 255, 255, 0.68); }
+  /* A shadow on every piece of text, not just the title: the scrim alone
+     cannot be trusted against an arbitrary photograph. */
+  .stage.cover .eyebrow,
+  .stage.cover .track,
+  .stage.cover .sub,
+  .stage.cover .where,
+  .stage.cover .times { text-shadow: 0 1px 6px rgba(0, 0, 0, 0.75); }
+  .stage.cover .eyebrow { color: rgba(255, 255, 255, 0.82); }
+  .stage.cover .track { color: #fff; font-size: 1.45rem; font-weight: 500; }
+  .stage.cover .sub { color: rgba(255, 255, 255, 0.92); font-size: 0.9rem; }
+  .stage.cover .where { color: rgba(255, 255, 255, 0.74); }
+  .stage.cover .btn { filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.5)); }
   .stage.cover .bar { background: rgba(255, 255, 255, 0.28); }
   .stage.cover .bar-fill { background: #fff; }
-  .stage.cover .times { color: rgba(255, 255, 255, 0.82); }
+  .stage.cover .times { color: rgba(255, 255, 255, 0.88); }
   .stage.cover .btn { color: rgba(255, 255, 255, 0.92); }
   .stage.cover .btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.2); color: #fff; }
   .stage.cover .btn:disabled { opacity: 0.4; }
@@ -3494,6 +3521,9 @@ const MEDIA_STYLES = `
 
   /* ------------------------------------------------------------ other rooms */
   .others { margin-top: 4px; }
+  /* No rule directly under the artwork - the panel edge is separation enough. */
+  .stage.cover + .presets + .others > .other:first-of-type,
+  .stage.cover + .others > .other:first-of-type { border-top: none; }
   .others.hidden { display: none; }
   .other {
     display: flex; align-items: center; gap: 10px; width: 100%;
@@ -3832,7 +3862,9 @@ class WabitMediaCard extends HTMLElement {
       e.stage._mode = mode;
       e.art.style.backgroundImage = art ? `url("${art}")` : "";
       e.art.classList.toggle("has-art", !!art);
-      e.stage.style.setProperty("--art", art ? `url("${art}")` : "none");
+      // Set on the host so the panel and the body below share one source.
+      this.style.setProperty("--art", art ? `url("${art}")` : "none");
+      e.body.classList.toggle("tinted", !!art);
       // Cover needs an image to cover with; without one it falls back to tile.
       e.stage.classList.toggle("cover", mode === "cover" && !!art);
       e.stage.classList.toggle("washed", mode === "tile" && !!art && this._config.art_backdrop);
@@ -4036,7 +4068,11 @@ class WabitMediaCard extends HTMLElement {
 
     const body = document.createElement("div");
     body.className = this._config.show_header ? "body tight" : "body";
+    const bodyWash = document.createElement("div");
+    bodyWash.className = "body-wash";
+    body.appendChild(bodyWash);
     card.appendChild(body);
+    this._els.body = body;
 
     const error = document.createElement("div");
     error.className = "error";
