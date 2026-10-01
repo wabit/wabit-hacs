@@ -66,11 +66,14 @@ customElements.define("ha-card", class extends HTMLElement {
 });
 
 const ICONS = {
-  "mdi:chevron-down": "M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z",
-  "mdi:lightbulb":
-    "M12 2a7 7 0 00-4 12.74V17a1 1 0 001 1h6a1 1 0 001-1v-2.26A7 7 0 0012 2zM9.5 19h5v.9A1.6 1.6 0 0112.9 21.5h-1.8A1.6 1.6 0 019.5 19.9V19z",
-  "mdi:lightbulb-group-outline":
-    "M9 2a6 6 0 00-3.4 10.9c.4.3.6.7.6 1.1v1a1 1 0 001 1h3.6a1 1 0 001-1v-1c0-.4.2-.8.6-1.1A6 6 0 009 2zm0 1.8A4.2 4.2 0 0111.4 11.4c-.5.4-.9.9-1.1 1.4H7.7c-.2-.5-.6-1-1.1-1.4A4.2 4.2 0 019 3.8zM7.2 17.1h3.6v.6a1.3 1.3 0 01-1.3 1.3H8.5a1.3 1.3 0 01-1.3-1.3v-.6zM17 7.5a4.5 4.5 0 00-2.2 8.4c.2.1.3.3.3.6v.8a.8.8 0 00.8.8h2.2a.8.8 0 00.8-.8v-.8c0-.3.1-.5.3-.6A4.5 4.5 0 0017 7.5zm-1.2 12h2.4v.4a1 1 0 01-1 1h-.4a1 1 0 01-1-1v-.4z",
+  "mdi:trash-can":
+    "M9 3v1H4v2h1v13a2 2 0 002 2h10a2 2 0 002-2V6h1V4h-5V3H9zm-2 3h10v13H7V6zm2 2v9h2V8H9zm4 0v9h2V8h-2z",
+  "mdi:leaf":
+    "M17 8c-5 1.1-8.5 1.5-11 3.3C3.4 13.2 3 16.6 3.8 21.3l1.9.6.9-2.2c.5.2 1 .3 1.4.3C19 20 20 8 20 8c-.9 1.7-5.1 2-9.4 2.8-4 .8-6.2 3.3-6.9 6.2C5 13.5 9.6 10.7 17 8z",
+  "mdi:recycle":
+    "M12 2.5l3.3 5.7-1.8 1-1.5-2.7-1.5 2.7-1.8-1L12 2.5zM4.8 13.1l1.8 1-1.5 2.7h3.2v2.1H2.1l2.7-5.8zM19.2 13.1l2.7 5.8h-6.2v-2.1h3.2l-1.5-2.7 1.8-1z",
+  "mdi:bottle-soda-classic-outline":
+    "M10 2h4v2.3c0 .7.2 1.3.7 1.8l.9 1.1c.3.3.4.7.4 1.1V20a2 2 0 01-2 2h-4a2 2 0 01-2-2V8.3c0-.4.1-.8.4-1.1l.9-1.1c.5-.5.7-1.1.7-1.8V2zm2 2v.3c0 1.2-.4 2.3-1.2 3.2l-.8 1V20h4V8.5l-.8-1A4.9 4.9 0 0112 4.3V4z",
 };
 customElements.define("ha-icon", class extends HTMLElement {
   connectedCallback() {
@@ -159,26 +162,40 @@ globalThis.Date = class extends Real {
   static now() { return new Real(2026, 9, 1, 9, 0, 0).getTime(); }
 };
 
-const BINS = {
-  green:    { date: "07/10/2026", relative_time: "in 5 days" },
-  grey:     { date: "14/10/2026", relative_time: "in 12 days" },
-  beige:    { date: "21/10/2026", relative_time: "in 19 days" },
-  burgundy: { date: "07/10/2026", relative_time: "in 5 days" },
+const uk = (name, colour, date, days, icon) => ({
+  state: `In ${days} days`,
+  attributes: { colour, next_collection: date, days, icon,
+                device_class: "bin_collection_schedule", friendly_name: name },
+});
+const NORMAL = {
+  "sensor.bins_140l_grey_rubbish_bin":
+    uk("Bins 140L grey rubbish bin", "grey", "14/10/2026", 13, "mdi:trash-can"),
+  "sensor.bins_240l_beige_recycling_bin":
+    uk("Bins 240L beige recycling bin", "burlywood", "21/10/2026", 20, "mdi:recycle"),
+  "sensor.bins_240l_burgundy_plastic_bin":
+    uk("Bins 240L burgundy plastic bin", "maroon", "07/10/2026", 6,
+       "mdi:bottle-soda-classic-outline"),
+  "sensor.bins_240l_green_garden_bin":
+    uk("Bins 240L green garden bin", "darkgreen", "07/10/2026", 6, "mdi:leaf"),
 };
-const SOON = { ...BINS, green: { date: "02/10/2026", relative_time: "tomorrow" },
-                        burgundy: { date: "02/10/2026", relative_time: "tomorrow" } };
+const SOON = { ...NORMAL,
+  "sensor.bins_240l_burgundy_plastic_bin":
+    uk("Bins 240L burgundy plastic bin", "maroon", "02/10/2026", 1,
+       "mdi:bottle-soda-classic-outline"),
+  "sensor.bins_240l_green_garden_bin":
+    uk("Bins 240L green garden bin", "darkgreen", "02/10/2026", 1, "mdi:leaf"),
+};
 
-function makeHass(dark, attrs) {
+function makeHass(dark, states) {
   return {
     themes: { darkMode: dark },
     locale: { language: "en-GB" },
-    states: { "sensor.bin_collection": { state: "ok",
-      attributes: { ...attrs, friendly_name: "Bin Collection" } } },
+    states,
     callService: () => {},
   };
 }
 
-function mount(paneClass, caption, dark, attrs) {
+function mount(paneClass, caption, dark, states) {
   const pane = document.createElement("div");
   pane.className = "pane " + paneClass;
   const cap = document.createElement("div");
@@ -188,11 +205,11 @@ function mount(paneClass, caption, dark, attrs) {
   const card = document.createElement("wabit-bin-collection-card");
   pane.appendChild(card);
   document.body.appendChild(pane);
-  card.setConfig({ entity: "sensor.bin_collection" });
-  card.hass = makeHass(dark, attrs);
+  card.setConfig({});           // nothing to configure - the sensors are found
+  card.hass = makeHass(dark, states);
 }
 
-mount("light", "Two bins share the next collection", false, BINS);
+mount("light", "Found automatically - two bins share a day", false, NORMAL);
 mount("dark", "Going out tomorrow", true, SOON);
 </script>
 </body></html>

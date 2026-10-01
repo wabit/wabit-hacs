@@ -38,24 +38,47 @@ Then add the card from the dashboard card picker ("Wabit Wakeup"), or paste YAML
 
 ```yaml
 type: custom:wabit-bin-collection-card
-entity: sensor.bin_collection
 ```
 
-The sensor is expected to carry one attribute per bin, each an object with a `date`
-(`DD/MM/YYYY`) and optionally a `relative_time`. That is the shape the Bolton council
-scraper produces, and the default bin keys — `green`, `grey`, `beige`, `burgundy` — match it.
+That is the whole config. With the
+[UK Bin Collection Data](https://github.com/robbrad/UKBinCollectionData) integration
+installed, the card finds your bin sensors itself — that integration stamps each one with
+`device_class: bin_collection_schedule`, and every bin brings its own name, colour and
+icon, so there is nothing to wire up.
 
 ### Options
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `type` | string | **required** | `custom:wabit-bin-collection-card` |
-| `entity` | entity | **required** | The sensor holding a per-bin attribute. |
+| `entities` | list | – | Specific bin sensors to show. Omit it and they are discovered. |
+| `overrides` | map | – | Per-sensor `{ label, color, icon }` tweaks, keyed by entity id. |
+| `strip_prefix` | boolean | `true` | Trim the prefix shared by every bin's name, so "Bins 240L green garden bin" shows as "240L green garden bin". |
 | `title` | string | `Bin Collection` | Card header. Set to `""` for no header. |
 | `show_hero` | boolean | `true` | The large next-collection panel. With it off, every collection becomes a row. |
-| `bins` | map | the four below | Which attributes to read, and how to label and colour each. |
+| `entity` | entity | – | **Older setups only.** One sensor carrying an object per bin. See below. |
+| `bins` | map | the four below | Labels and colours for `entity` mode only. |
+
+### Renaming or recolouring a bin
+
+Discovered bins use the integration's own name, colour and icon. To change one, key an
+override by its entity id — anything you leave out keeps what the sensor reported:
 
 ```yaml
+overrides:
+  sensor.bins_140l_grey_rubbish_bin:
+    label: Rubbish
+    color: "#55595d"
+```
+
+### Older single-sensor setups
+
+If your dates come from one sensor carrying an object per bin — a `date` of `DD/MM/YYYY`
+and optionally a `relative_time` — point `entity` at it instead. Discovery is then skipped
+and the `bins` map supplies the labels and colours:
+
+```yaml
+entity: sensor.bin_collection
 bins:
   green:    { label: Garden,        color: "#3fa34d" }
   grey:     { label: General Waste, color: "#7a7f85" }
@@ -73,10 +96,11 @@ and shows both as chips under a single date. With a fortnightly garden bin and a
 food bin that coincide, that is the difference between reading "Wed 7 Oct: Garden + Food
 Waste" and scanning four rows for matching dates.
 
-The countdown is computed from each `date` rather than taken from `relative_time`, so it
-stays correct on a dashboard left open overnight and cannot drift from the date shown
-beside it. If your feed's own wording disagrees, the date is what the card trusts. A bin
-whose date will not parse still appears, using the sensor's own wording, sorted last.
+The countdown is computed from each collection date rather than taken from the feed's own
+wording, so it stays correct on a dashboard left open overnight and cannot drift from the
+date shown beside it. If the feed's wording disagrees, the date is what the card trusts. A
+bin whose date will not parse still appears, falling back to the integration's own day
+count and the sensor's text, sorted last.
 
 Today and tomorrow get a solid chip instead of a tonal one, so an imminent collection
 reads differently at a glance. Dates are formatted in Home Assistant's own language

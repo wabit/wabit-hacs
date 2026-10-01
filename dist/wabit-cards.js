@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.5.0";
+const VERSION = "1.6.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -2366,6 +2366,43 @@ if (!window.customCards.some((c) => c.type === "wabit-room-lights-card")) {
 
 /* ---------------------------------------------- wabit-bin-collection-card */
 
+/**
+ * The UK Bin Collection Data integration stamps every bin sensor with this
+ * device class, which is what lets the card find them without being told.
+ */
+const BIN_DEVICE_CLASS = "bin_collection_schedule";
+
+/** Every bin sensor that integration has created. */
+function discoverBinSensors(hass) {
+  const states = (hass && hass.states) || {};
+  return Object.keys(states)
+    .filter((id) => id.startsWith("sensor."))
+    .filter((id) => {
+      const a = states[id].attributes || {};
+      return a.device_class === BIN_DEVICE_CLASS;
+    })
+    .sort();
+}
+
+/**
+ * Longest run of leading whole words shared by every name. The integration
+ * prefixes each sensor with its config entry name ("Bins 240L green garden
+ * bin"), which is noise once they are all on one card.
+ */
+function commonWordPrefix(names) {
+  if (names.length < 2) return "";
+  const split = names.map((n) => String(n).trim().split(/\s+/));
+  const first = split[0];
+  let i = 0;
+  while (i < first.length - 1) {
+    const word = first[i];
+    // Never strip so much that a name would be left empty.
+    if (!split.every((w) => w.length > i + 1 && w[i] === word)) break;
+    i += 1;
+  }
+  return first.slice(0, i).join(" ");
+}
+
 const DEFAULT_BINS = {
   green: { label: "Garden", color: "#3fa34d" },
   grey: { label: "General Waste", color: "#7a7f85" },
@@ -2474,6 +2511,11 @@ const BIN_STYLES = `
     background: var(--bin, var(--wc-accent));
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
   }
+  /* The UK Bin Collection Data integration gives each bin its own icon, which
+     says more than a coloured dot. Falls back to the dot when there is none. */
+  .glyph { color: var(--bin, var(--wc-accent)); flex: none; }
+  .glyph-chip { --mdc-icon-size: 19px; }
+  .glyph-row { --mdc-icon-size: 24px; }
 
   /* ------------------------------------------------------------- rows */
   .row {
@@ -2508,21 +2550,37 @@ class WabitBinCollectionCard extends HTMLElement {
   }
 
   static getStubConfig(hass) {
+    // Nothing to configure when the bin sensors can be found on their own.
+    if (discoverBinSensors(hass).length) {
+      return { type: "custom:wabit-bin-collection-card" };
+    }
     const ids = Object.keys((hass && hass.states) || {});
     const found = ids.find(
       (e) => e.startsWith("sensor.") && /bin|waste|refuse|recycl/.test(e)
     );
-    return { type: "custom:wabit-bin-collection-card", entity: found || "sensor.bin_collection" };
+    const stub = { type: "custom:wabit-bin-collection-card" };
+    if (found) stub.entity = found;
+    return stub;
   }
 
   setConfig(config) {
     const cfg = config || {};
-    if (isUnset(cfg.entity)) {
-      throw new Error("wabit-bin-collection-card: `entity` is required");
-    }
-    if (!String(cfg.entity).startsWith("sensor.")) {
+    // Three ways in: an explicit list of per-bin sensors, a single sensor with
+    // one attribute per bin (the older scraper shape), or nothing at all, in
+    // which case the bin sensors are discovered.
+    if (!isUnset(cfg.entity) && !String(cfg.entity).startsWith("sensor.")) {
       throw new Error("wabit-bin-collection-card: `entity` must be a sensor");
     }
+    if (cfg.entities !== undefined && !Array.isArray(cfg.entities)) {
+      throw new Error("wabit-bin-collection-card: `entities` must be a list of sensors");
+    }
+    (cfg.entities || []).forEach((e) => {
+      if (typeof e !== "string" || !e.startsWith("sensor.")) {
+        throw new Error(
+          `wabit-bin-collection-card: \`entities\` may only contain sensors, got "${e}"`
+        );
+      }
+    });
     const bins = {};
     const src = cfg.bins && typeof cfg.bins === "object" ? cfg.bins : DEFAULT_BINS;
     for (const [key, v] of Object.entries(src)) {
@@ -2537,7 +2595,10 @@ class WabitBinCollectionCard extends HTMLElement {
     }
 
     this._config = {
-      entity: cfg.entity,
+      entity: isUnset(cfg.entity) ? null : cfg.entity,
+      entities: Array.isArray(cfg.entities) && cfg.entities.length ? cfg.entities : null,
+      overrides: cfg.overrides && typeof cfg.overrides === "object" ? cfg.overrides : {},
+      strip_prefix: cfg.strip_prefix !== false,
       title: cfg.title === undefined ? "Bin Collection" : cfg.title,
       bins,
       show_hero: cfg.show_hero !== false,
@@ -2578,13 +2639,19 @@ class WabitBinCollectionCard extends HTMLElement {
     return 1 + (this._config.show_hero ? 2 : 0) + m.rows.length;
   }
 
-  /** Bins grouped by collection day, soonest first. */
-  _model() {
-    const hass = this._hass;
+  /** One entry per bin, from whichever source this card is configured for. */
+  _items() {
     const cfg = this._config;
-    const st = hass.states[cfg.entity];
-    if (!st) return { error: `${cfg.entity} is not available.` };
+    if (cfg.entity) return this._legacyItems();
+    const ids = cfg.entities || discoverBinSensors(this._hass);
+    return this._sensorItems(ids);
+  }
 
+  /** A single sensor carrying one object attribute per bin. */
+  _legacyItems() {
+    const cfg = this._config;
+    const st = this._hass.states[cfg.entity];
+    if (!st) return { error: `${cfg.entity} is not available.` };
     const attrs = st.attributes || {};
     const now = new Date();
     const items = [];
@@ -2593,18 +2660,66 @@ class WabitBinCollectionCard extends HTMLElement {
       if (!data || typeof data !== "object") continue;
       const date = parseDMY(data.date);
       items.push({
-        key,
-        label: conf.label,
-        color: conf.color,
-        raw: data.date,
-        date,
+        key, label: conf.label, color: conf.color, raw: data.date, date,
         days: date ? daysUntil(date, now) : null,
         fallback: data.relative_time,
       });
     }
-    if (!items.length) {
-      return { empty: `No bin data in ${cfg.entity}.` };
+    return items.length ? { items } : { empty: `No bin data in ${cfg.entity}.` };
+  }
+
+  /** One sensor per bin, each carrying colour, next_collection and days. */
+  _sensorItems(ids) {
+    const hass = this._hass;
+    const cfg = this._config;
+    const live = ids.filter((id) => hass.states[id]);
+    if (!live.length) {
+      return {
+        empty: cfg.entities
+          ? "None of the configured bin sensors are available."
+          : "No bin sensors found. Set up the UK Bin Collection Data integration, " +
+            "or point the card at a sensor with `entity`.",
+      };
     }
+
+    const nameOf = (id) => {
+      const st = hass.states[id];
+      return (st.attributes && st.attributes.friendly_name) || id;
+    };
+    const prefix = cfg.strip_prefix ? commonWordPrefix(live.map(nameOf)) : "";
+
+    const now = new Date();
+    const items = live.map((id) => {
+      const st = hass.states[id];
+      const a = st.attributes || {};
+      const over = cfg.overrides[id] || {};
+      let label = nameOf(id);
+      if (prefix && label.toLowerCase().startsWith(prefix.toLowerCase())) {
+        const rest = label.slice(prefix.length).trim();
+        if (rest) label = rest;
+      }
+      const date = parseDMY(a.next_collection);
+      return {
+        key: id,
+        label: over.label || label,
+        color: over.color || a.colour || a.color || "#9e9e9e",
+        raw: a.next_collection,
+        icon: over.icon || a.icon || null,
+        date,
+        // Recomputed from the date so it stays right overnight, with the
+        // integration's own count as the fallback.
+        days: date ? daysUntil(date, now) : (typeof a.days === "number" ? a.days : null),
+        fallback: st.state,
+      };
+    });
+    return { items };
+  }
+
+  /** Bins grouped by collection day, soonest first. */
+  _model() {
+    const sourced = this._items();
+    if (sourced.error || sourced.empty) return sourced;
+    const items = sourced.items;
 
     // Two bins on the same day are one collection, not two rows.
     const groups = new Map();
@@ -2632,6 +2747,25 @@ class WabitBinCollectionCard extends HTMLElement {
   _locale() {
     const l = this._hass && this._hass.locale;
     return (l && l.language) || undefined;
+  }
+
+  /** The bin's own icon when it has one, otherwise a coloured dot. */
+  _binGlyph(item, cls) {
+    if (item.icon && customElements.get("ha-icon")) {
+      const el = document.createElement("ha-icon");
+      el.setAttribute("icon", item.icon);
+      // Deliberately not the dot/bar classes: those paint a background in the
+      // same colour the glyph is drawn in, which would hide the icon entirely.
+      el.className = cls === "bar" ? "glyph glyph-row" : "glyph glyph-chip";
+      el.style.setProperty("--bin", item.color);
+      el.title = item.label;
+      return el;
+    }
+    const span = document.createElement("span");
+    span.className = cls;
+    span.style.setProperty("--bin", item.color);
+    span.title = item.label;
+    return span;
   }
 
   _label(group) {
@@ -2695,12 +2829,9 @@ class WabitBinCollectionCard extends HTMLElement {
     g.bins.forEach((b) => {
       const chip = document.createElement("div");
       chip.className = "chip";
-      const dot = document.createElement("span");
-      dot.className = "dot";
-      dot.style.setProperty("--bin", b.color);
       const label = document.createElement("span");
       label.textContent = b.label;
-      chip.append(dot, label);
+      chip.append(this._binGlyph(b, "dot"), label);
       h.chips.appendChild(chip);
     });
   }
@@ -2714,13 +2845,7 @@ class WabitBinCollectionCard extends HTMLElement {
 
       const bars = document.createElement("div");
       bars.className = "bars";
-      g.bins.forEach((b) => {
-        const bar = document.createElement("span");
-        bar.className = "bar";
-        bar.style.setProperty("--bin", b.color);
-        bar.title = b.label;
-        bars.appendChild(bar);
-      });
+      g.bins.forEach((b) => bars.appendChild(this._binGlyph(b, "bar")));
 
       const main = document.createElement("div");
       main.className = "row-main";
@@ -2804,15 +2929,19 @@ class WabitBinCollectionCard extends HTMLElement {
 /* --------------------------------------- wabit-bin-collection-card-editor */
 
 const BIN_LABELS = {
-  entity: "Bin sensor",
+  entities: "Bin sensors (leave empty to find them automatically)",
+  entity: "Or one sensor with an attribute per bin (older scraper setups)",
   title: "Card title (leave empty for no header)",
   show_hero: "Show the next-collection panel",
+  strip_prefix: "Trim the shared prefix off each bin's name",
 };
 
 const BIN_SCHEMA = [
-  { name: "entity", required: true, selector: { entity: { domain: "sensor" } } },
+  { name: "entities", selector: { entity: { domain: "sensor", multiple: true } } },
+  { name: "entity", selector: { entity: { domain: "sensor" } } },
   { name: "title", selector: { text: {} } },
   { name: "show_hero", selector: { boolean: {} } },
+  { name: "strip_prefix", selector: { boolean: {} } },
 ];
 
 const BIN_EDITOR_STYLES = `
@@ -2906,6 +3035,7 @@ class WabitBinCollectionCardEditor extends HTMLElement {
       ev.stopPropagation();
       this._config = { ...this._config, ...ev.detail.value };
       this._emit();
+      this._renderBins(); // switching to or from single-sensor mode
     });
     root.appendChild(form);
 
@@ -2917,22 +3047,26 @@ class WabitBinCollectionCardEditor extends HTMLElement {
     const hint = document.createElement("div");
     hint.className = "hint";
     hint.textContent =
-      "One row per attribute on the sensor. The colour is used for the dot and " +
-      "bar next to each collection.";
+      "Labels and colours for the single-sensor setup above. Bin sensors found " +
+      "automatically bring their own colour, so this section does not apply to them.";
     const list = document.createElement("div");
     list.className = "bin-list";
     section.append(title, hint, list);
     root.appendChild(section);
 
     this._form = form;
-    this._els = { list };
+    this._els = { list, section };
     this._built = true;
   }
 
   _renderBins() {
     if (!this._els) return;
+    // The per-bin labels and colours only mean anything in single-sensor mode.
+    const legacy = !!this._config.entity;
+    this._els.section.style.display = legacy ? "" : "none";
     const list = this._els.list;
     list.innerHTML = "";
+    if (!legacy) return;
     Object.entries(this._config.bins).forEach(([key, conf]) => {
       const row = document.createElement("div");
       row.className = "bin-row";
@@ -2961,9 +3095,11 @@ class WabitBinCollectionCardEditor extends HTMLElement {
     if (!this._form || !this._hass || !this._config) return;
     this._form.hass = this._hass;
     const data = {
+      entities: this._config.entities,
       entity: this._config.entity,
       title: this._config.title === undefined ? "Bin Collection" : this._config.title,
       show_hero: this._config.show_hero !== false,
+      strip_prefix: this._config.strip_prefix !== false,
     };
     if (JSON.stringify(this._form.data) !== JSON.stringify(data)) this._form.data = data;
   }

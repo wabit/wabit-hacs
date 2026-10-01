@@ -150,7 +150,6 @@ none.setConfig({ entity: "sensor.empty_bins" });
 none.hass = hass;
 eq("no bin attributes message", none._els.empty.textContent, "No bin data in sensor.empty_bins.");
 
-throws("entity required", () => new T.WabitBinCollectionCard().setConfig({}), "`entity` is required");
 throws("entity must be a sensor",
   () => new T.WabitBinCollectionCard().setConfig({ entity: "light.x" }), "must be a sensor");
 
@@ -173,6 +172,166 @@ eq("stub finds a bin sensor", T.WabitBinCollectionCard.getStubConfig(hass).entit
 eq("registered", !!customElements.get("wabit-bin-collection-card"), true);
 eq("listed in the picker",
    window.customCards.some((c) => c.type === "wabit-bin-collection-card"), true);
+
+
+/* ================== UK Bin Collection Data integration ================== */
+
+const uk = (name, colour, date, days, icon) => ({
+  state: `In ${days} days`,
+  attributes: {
+    colour, next_collection: date, days, icon,
+    device_class: "bin_collection_schedule", friendly_name: name,
+  },
+});
+const ukStates = {
+  "sensor.bins_140l_grey_rubbish_bin":
+    uk("Bins 140L grey rubbish bin", "grey", "14/10/2026", 13, "mdi:trash-can"),
+  "sensor.bins_240l_beige_recycling_bin":
+    uk("Bins 240L beige recycling bin", "burlywood", "21/10/2026", 20, "mdi:recycle"),
+  "sensor.bins_240l_burgundy_plastic_bin":
+    uk("Bins 240L burgundy plastic bin", "maroon", "07/10/2026", 6,
+       "mdi:bottle-soda-classic-outline"),
+  "sensor.bins_240l_green_garden_bin":
+    uk("Bins 240L green garden bin", "darkgreen", "07/10/2026", 6, "mdi:leaf"),
+};
+const ukHass = {
+  themes: { darkMode: false },
+  locale: { language: "en-GB" },
+  states: {
+    ...ukStates,
+    // Must be ignored: right domain, wrong device class.
+    "sensor.kitchen_temperature": { state: "19", attributes: { device_class: "temperature" } },
+    "sensor.bin_collection": hass.states["sensor.bin_collection"],
+  },
+  callService: () => {},
+};
+const mkUk = (cfg) => {
+  const c = new T.WabitBinCollectionCard();
+  c.setConfig({ ...cfg });
+  c.hass = ukHass;
+  return c;
+};
+
+eq("discovers bin sensors by device class", T.discoverBinSensors(ukHass), [
+  "sensor.bins_140l_grey_rubbish_bin",
+  "sensor.bins_240l_beige_recycling_bin",
+  "sensor.bins_240l_burgundy_plastic_bin",
+  "sensor.bins_240l_green_garden_bin",
+]);
+eq("discovers nothing when the integration is absent", T.discoverBinSensors(hass), []);
+
+eq("common prefix across bin names",
+   T.commonWordPrefix(["Bins 140L grey rubbish bin", "Bins 240L green garden bin"]), "Bins");
+eq("no common prefix", T.commonWordPrefix(["Green bin", "Grey bin"]), "");
+eq("single name has no prefix to strip", T.commonWordPrefix(["Bins green"]), "");
+// Must never consume a whole name.
+eq("prefix stops short of emptying a name",
+   T.commonWordPrefix(["Bins green", "Bins green bin"]), "Bins");
+
+/* ------------------------------------------------- zero-config discovery */
+const auto = mkUk({});
+eq("no entity needed", auto._config.entity, null);
+eq("four bins on three days", auto._lastModel.groups.length, 3);
+eq("shared day grouped",
+   auto._lastModel.groups[0].bins.map((b) => b.key).sort(),
+   ["sensor.bins_240l_burgundy_plastic_bin", "sensor.bins_240l_green_garden_bin"]);
+eq("prefix stripped from labels",
+   auto._lastModel.groups[1].bins[0].label, "140L grey rubbish bin");
+eq("colour taken from the sensor",
+   auto._lastModel.groups[1].bins[0].color, "grey");
+eq("icon taken from the sensor",
+   auto._lastModel.groups[1].bins[0].icon, "mdi:trash-can");
+eq("hero date", auto._els.heroDate.textContent, "Wed 7 Oct");
+eq("hero countdown recomputed from the date", auto._els.heroWhen.textContent, "in 6 days");
+eq("hero chips", auto._els.chips.children.map((c) => c.children[1].textContent),
+   ["240L burgundy plastic bin", "240L green garden bin"]);
+eq("rows for the other days", auto._els.rows.children.length, 2);
+eq("row countdown", auto._els.rows.children[0].children[2].textContent, "in 13 days");
+
+const noStrip = mkUk({ strip_prefix: false });
+eq("full names kept", noStrip._lastModel.groups[1].bins[0].label, "Bins 140L grey rubbish bin");
+
+/* ---------------------------------------------------- explicit entities */
+const picked = mkUk({ entities: ["sensor.bins_140l_grey_rubbish_bin"] });
+eq("only the listed sensor", picked._lastModel.groups.length, 1);
+eq("single entity keeps its full name", picked._lastModel.groups[0].bins[0].label,
+   "Bins 140L grey rubbish bin");
+
+const over = mkUk({ overrides: {
+  "sensor.bins_140l_grey_rubbish_bin": { label: "Rubbish", color: "#101010" } } });
+const greyGroup = over._lastModel.groups.find((g) => g.raw === "14/10/2026");
+eq("override label", greyGroup.bins[0].label, "Rubbish");
+eq("override colour", greyGroup.bins[0].color, "#101010");
+eq("override leaves others alone",
+   over._lastModel.groups[0].bins[0].color, "maroon");
+
+/* ------------------------------------------------- glyphs from the icon */
+customElements.define("ha-icon", class {});
+const iconCard = mkUk({});
+const firstChip = iconCard._els.chips.children[0];
+eq("chip uses an ha-icon", firstChip.children[0].tagName, "ha-icon");
+eq("chip icon is the bin's own", firstChip.children[0].getAttribute("icon"),
+   "mdi:bottle-soda-classic-outline");
+eq("chip icon tinted", firstChip.children[0].style._props["--bin"], "maroon");
+// The dot/bar classes paint a background in the glyph's own colour, so an icon
+// carrying them would be invisible.
+eq("icon does not get the dot styling",
+   firstChip.children[0].classList.contains("dot"), false);
+eq("icon is sized as a chip glyph",
+   firstChip.children[0].classList.contains("glyph-chip"), true);
+eq("row icon does not get the bar styling",
+   iconCard._els.rows.children[0].children[0].children[0].classList.contains("bar"), false);
+eq("row icon is sized as a row glyph",
+   iconCard._els.rows.children[0].children[0].children[0].classList.contains("glyph-row"), true);
+eq("row uses an ha-icon",
+   iconCard._els.rows.children[0].children[0].children[0].tagName, "ha-icon");
+delete customElements._d["ha-icon"];
+// Without ha-icon it must still render, as a coloured dot.
+const dotCard = mkUk({});
+eq("falls back to a dot", dotCard._els.chips.children[0].children[0].tagName, "span");
+eq("dot still tinted", dotCard._els.chips.children[0].children[0].style._props["--bin"], "maroon");
+
+/* --------------------------------------------------------- failure modes */
+const nothing = new T.WabitBinCollectionCard();
+nothing.setConfig({});
+nothing.hass = hass; // no bin sensors at all
+eq("nothing found message", nothing._els.empty.textContent,
+   "No bin sensors found. Set up the UK Bin Collection Data integration, " +
+   "or point the card at a sensor with `entity`.");
+
+const gone = mkUk({ entities: ["sensor.not_here"] });
+eq("configured sensors missing", gone._els.empty.textContent,
+   "None of the configured bin sensors are available.");
+
+/* A sensor whose date will not parse still appears, using its own state text. */
+const brokenHass = { ...ukHass, states: { ...ukStates,
+  "sensor.bins_140l_grey_rubbish_bin": { state: "Unknown", attributes: {
+    colour: "grey", next_collection: "n/a", days: 4,
+    device_class: "bin_collection_schedule", friendly_name: "Bins grey" } } } };
+const broken = new T.WabitBinCollectionCard();
+broken.setConfig({});
+broken.hass = brokenHass;
+const brokenItem = broken._lastModel.groups.find((g) => g.raw === "n/a");
+eq("unparseable date still listed", !!brokenItem, true);
+eq("falls back to the integration's day count", brokenItem.bins[0].days, 4);
+eq("undated sorts last", broken._lastModel.groups.at(-1).raw, "n/a");
+
+throws("entities must be a list",
+  () => new T.WabitBinCollectionCard().setConfig({ entities: "sensor.a" }), "must be a list");
+throws("entities must be sensors",
+  () => new T.WabitBinCollectionCard().setConfig({ entities: ["light.a"] }), "may only contain sensors");
+
+eq("stub needs no entity when discovery works",
+   "entity" in T.WabitBinCollectionCard.getStubConfig(ukHass), false);
+eq("stub falls back to a named sensor",
+   T.WabitBinCollectionCard.getStubConfig(hass).entity, "sensor.bin_collection");
+
+/* The older single-sensor setup must keep working alongside. */
+const legacyMode = new T.WabitBinCollectionCard();
+legacyMode.setConfig({ entity: "sensor.bin_collection" });
+legacyMode.hass = ukHass;
+eq("legacy mode ignores discovery", legacyMode._lastModel.groups.length, 3);
+eq("legacy labels come from config", legacyMode._lastModel.groups[0].bins[0].label, "Garden");
 
 /* ------------------------------------------------------------- editor */
 customElements.define("ha-form", class {});
