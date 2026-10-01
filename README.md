@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/wabit/wabit-hacs-dashboard/main/docs/logo.png" width="96" align="right" alt="">
+
 # Wabit Cards
 
 Custom [Home Assistant](https://www.home-assistant.io) dashboard cards, installable through
