@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.17.0";
+const VERSION = "1.18.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -5262,6 +5262,11 @@ const AIR_COLORS = {
  */
 const AIR_CHARTS = [
   {
+    key: "climate", title: "Temperature & humidity", icon: "mdi:thermometer",
+    metrics: ["temperature", "humidity"],
+    width: "full", legend: true, independent: true, line_width: 2,
+  },
+  {
     key: "pm", title: "Particulate matter", icon: "mdi:blur",
     metrics: ["pm1", "pm25", "pm4", "pm10"],
     width: "full", legend: true, line_width: 1, lower_bound: 0,
@@ -5274,8 +5279,6 @@ const AIR_CHARTS = [
     key: "pressure", metrics: ["pressure"], width: "full",
     labels: true, extrema: true, line_width: 2,
   },
-  { key: "temperature", metrics: ["temperature"], width: "half", line_width: 2 },
-  { key: "humidity", metrics: ["humidity"], width: "half", line_width: 2 },
   {
     key: "voc", metrics: ["voc"], width: "half",
     labels: true, extrema: true, line_width: 2, lower_bound: 0, upper_bound: 500,
@@ -5528,6 +5531,7 @@ const AIR_STYLES = `
     --wc-outline: var(--md-sys-color-outline-variant, var(--divider-color, #e0e0e0));
     /* Judgement colours are literal: green, amber and red mean the same thing
        in every theme, and a themed accent would not carry the meaning. */
+    --wc-card-bg: var(--ha-card-background, var(--card-background-color, transparent));
     --wc-good: #2e9b57;
     --wc-fair: #c88a1a;
     --wc-poor: #cf4436;
@@ -5569,6 +5573,13 @@ const AIR_STYLES = `
     border-radius: 14px; padding: 10px 12px 8px; background: var(--wc-tonal);
     min-width: 0;
   }
+  /* Flat: no panel behind the graphs, so they sit straight on the card. The
+     label chips and point halos have to follow, or they keep painting the
+     panel colour over a background that is no longer there. */
+  .charts.flat { gap: 16px 24px; }
+  .charts.flat .chart { background: none; padding-left: 0; padding-right: 0; }
+  .charts.flat .axis { background: var(--wc-card-bg); }
+  .charts.flat .point { box-shadow: 0 0 0 2px var(--wc-card-bg); }
   .chart-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .chart-head .icon { --mdc-icon-size: 17px; color: var(--series, var(--wc-muted)); flex: none; }
   .chart-name {
@@ -5698,6 +5709,7 @@ class WabitAirCard extends HTMLElement {
       show_legend: cfg.show_legend !== false,
       show_labels: cfg.show_labels !== false,
       show_extrema: cfg.show_extrema !== false,
+      show_chart_background: cfg.show_chart_background !== false,
       hours: Number.isFinite(hours) && hours > 0 ? Math.min(hours, 168) : 12,
       points_per_hour: Number.isFinite(pph) && pph > 0 ? Math.min(pph, 60) : 6,
       colors: { ...AIR_COLORS, ...(cfg.colors || {}) },
@@ -5989,7 +6001,7 @@ class WabitAirCard extends HTMLElement {
 
   _hover(h, fraction) {
     const n = h.buckets;
-    if (fraction === null || !h.bounds || n < 2) {
+    if (fraction === null || !h.drawable || n < 2) {
       h.el.classList.remove("hovering");
       return;
     }
@@ -6010,9 +6022,9 @@ class WabitAirCard extends HTMLElement {
       const v = s.values[i];
       const on = typeof v === "number" && !Number.isNaN(v);
       s.point.style.display = on ? "" : "none";
-      if (on) {
+      if (on && s.bounds) {
         s.point.style.left = `${x}%`;
-        s.point.style.top = `${chartY(v, h.bounds) * 100}%`;
+        s.point.style.top = `${chartY(v, s.bounds) * 100}%`;
       }
       s.tipVal.textContent = on ? this._withUnit(s.metric, v) : "—";
     });
@@ -6059,14 +6071,28 @@ class WabitAirCard extends HTMLElement {
       s.point.style.setProperty("--series", s.metric.color);
     });
 
-    const bounds = chartBounds(h.series.map((s) => s.values), spec.lower_bound, spec.upper_bound);
-    const drawable = !!bounds && h.series.some((s) => s.values.some((v) => typeof v === "number"));
-    h.bounds = drawable ? bounds : null;
+    // Readings in different units cannot share an axis - degrees against a
+    // percentage would squash one of them into a flat line. An independent
+    // chart scales each line to its own range, so both shapes are readable and
+    // the legend and the hover readout carry the actual numbers.
+    const shared = chartBounds(h.series.map((s) => s.values), spec.lower_bound, spec.upper_bound);
+    h.series.forEach((s) => {
+      s.bounds = spec.independent
+        ? chartBounds([s.values], spec.lower_bound, spec.upper_bound)
+        : shared;
+    });
+    const drawable = h.series.some(
+      (s) => s.bounds && s.values.some((v) => typeof v === "number")
+    );
+    const bounds = spec.independent ? null : (drawable ? shared : null);
+    h.bounds = bounds;
+    h.drawable = drawable;
     h.plot.classList.toggle("hidden", !drawable);
 
     h.series.forEach((s) => {
-      s.line.setAttribute("d", drawable ? linePath(s.values, bounds, AIR_VIEW_W, AIR_VIEW_H) : "");
-      s.fill.setAttribute("d", drawable ? areaPath(s.values, bounds, AIR_VIEW_W, AIR_VIEW_H) : "");
+      const b = drawable ? s.bounds : null;
+      s.line.setAttribute("d", b ? linePath(s.values, b, AIR_VIEW_W, AIR_VIEW_H) : "");
+      s.fill.setAttribute("d", b ? areaPath(s.values, b, AIR_VIEW_W, AIR_VIEW_H) : "");
     });
 
     // The headline figure is the live state, not the last point of history.
@@ -6100,7 +6126,7 @@ class WabitAirCard extends HTMLElement {
       });
     }
 
-    const showAxis = cfg.show_labels && spec.labels && drawable;
+    const showAxis = cfg.show_labels && spec.labels && drawable && !!bounds;
     h.axisMax.classList.toggle("hidden", !showAxis);
     h.axisMin.classList.toggle("hidden", !showAxis);
     if (showAxis) {
@@ -6108,7 +6134,7 @@ class WabitAirCard extends HTMLElement {
       h.axisMin.textContent = this._format(lead, bounds.min);
     }
 
-    const ext = cfg.show_extrema && spec.extrema && drawable && h.series.length === 1
+    const ext = cfg.show_extrema && spec.extrema && drawable && bounds && h.series.length === 1
       ? seriesExtrema(h.series[0].values)
       : null;
     h.extMax.classList.toggle("hidden", !ext);
@@ -6248,7 +6274,7 @@ class WabitAirCard extends HTMLElement {
     body.appendChild(verdict);
 
     const charts = document.createElement("div");
-    charts.className = "charts";
+    charts.className = this._config.show_chart_background ? "charts" : "charts flat";
     body.appendChild(charts);
 
     Object.assign(this._els, {
@@ -6298,6 +6324,7 @@ const AIR_LABELS = {
   show_legend: "Show the legend on shared graphs",
   show_labels: "Show the axis range",
   show_extrema: "Mark the highest and lowest points",
+  show_chart_background: "Draw a panel behind each graph",
   show_header: "Show the header",
 };
 
@@ -6312,6 +6339,7 @@ const AIR_SCHEMA = [
   { name: "show_legend", selector: { boolean: {} } },
   { name: "show_labels", selector: { boolean: {} } },
   { name: "show_extrema", selector: { boolean: {} } },
+  { name: "show_chart_background", selector: { boolean: {} } },
   { name: "show_header", selector: { boolean: {} } },
 ];
 
@@ -6383,6 +6411,7 @@ class WabitAirCardEditor extends HTMLElement {
       show_legend: this._config.show_legend !== false,
       show_labels: this._config.show_labels !== false,
       show_extrema: this._config.show_extrema !== false,
+      show_chart_background: this._config.show_chart_background !== false,
       show_header: this._config.show_header !== false,
     };
     if (JSON.stringify(this._form.data) !== JSON.stringify(data)) this._form.data = data;

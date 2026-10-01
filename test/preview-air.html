@@ -179,7 +179,7 @@ const GOOD = {
 };
 const STUFFY = { ...GOOD, co2: 1643, voc_index: 182, pm2_5: 9.4 };
 
-function mount(paneClass, caption, dark, values, hoverChart) {
+function mount(paneClass, caption, dark, values, hoverChart, extra) {
   const pane = document.createElement("div");
   pane.className = "pane " + paneClass;
   const cap = document.createElement("div");
@@ -189,19 +189,25 @@ function mount(paneClass, caption, dark, values, hoverChart) {
   const card = document.createElement("wabit-air-card");
   pane.appendChild(card);
   document.body.appendChild(pane);
-  card.setConfig({ area: "office", hours: HOURS });
+  card.setConfig({ area: "office", hours: HOURS, ...(extra || {}) });
   card.hass = makeHass(values, dark);
   if (hoverChart) {
     // Hold one chart open so the screenshot shows the hover readout.
     setTimeout(() => {
       const h = card._els.chartEls.find((c) => c.spec.key === hoverChart);
-      if (h) card._hover(h, 0.62);
-    }, 30);
+      if (!h) return;
+      // Headless captures do not advance CSS transitions, so the readout would
+      // be caught part way through its fade.
+      h.tip.style.transition = "none";
+      card._hover(h, 0.62);
+    }, 250);   // past the tooltip's fade-in, so the capture is not mid-transition
   }
 }
 
 mount("light", "Fresh, reading the PM chart", false, GOOD, "pm");
 mount("dark", "Fresh", true, GOOD);
 mount("light", "Needs a window open", false, STUFFY, "co2");
+mount("light", "show_chart_background: false", false, GOOD, null,
+      { show_chart_background: false });
 </script>
 </body></html>

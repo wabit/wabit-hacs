@@ -64,10 +64,10 @@ Readings are grouped the way they are worth reading:
 
 | Graph | Width | Why |
 | --- | --- | --- |
-| PM1.0 / PM2.5 / PM4.0 / PM10 | full | One chart with four lines. Each particle size only means anything next to the others, and the axis starts at zero so their sizes compare honestly. |
+| Temperature + Humidity | full | One chart, but each line on its own scale: degrees and a percentage cannot share an axis without squashing one of them flat. The legend and the hover readout carry the real numbers. |
+| PM1.0 / PM2.5 / PM4.0 / PM10 | full | One chart with four lines on a shared axis starting at zero, so the particle sizes compare honestly - each one only means anything next to the others. |
 | CO₂ | full | The shape over a day is the point of it. |
 | Air pressure | full | Same. |
-| Temperature, Humidity | half each | Comfort, not air quality. |
 | VOC, NOx | half each | Pinned to the 0-500 the index is defined on. |
 
 Anything discovered that no graph claims gets its own half-width one, so nothing is
@@ -108,12 +108,22 @@ colors:
 | `show_legend` | boolean | `true` | The key under a shared graph. |
 | `show_labels` | boolean | `true` | The axis range. |
 | `show_extrema` | boolean | `true` | Markers on the highest and lowest points. |
+| `show_chart_background` | boolean | `true` | The panel behind each graph. Off puts them straight on the card. |
 | `hours` | number | `12` | How far back the graphs reach. Clamped to 1-168. |
 | `points_per_hour` | number | `6` | Graph resolution. Clamped to 1-60. |
 | `thresholds` | map | see below | Override where a reading stops being good. |
 
 An axis label is dropped where an extremum marker already answers it - either it reads the
-same number, or it would be printed on top of it.
+same number, or it would be printed on top of it. A chart whose lines are each on their own
+scale has no axis labels at all, because there is no single axis for them to describe.
+
+For graphs that sit straight on the card with no panel behind them:
+
+```yaml
+type: custom:wabit-air-card
+area: office
+show_chart_background: false
+```
 
 ### Readings
 

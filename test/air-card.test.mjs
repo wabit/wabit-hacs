@@ -183,7 +183,12 @@ eq("no readings, no extrema", T.seriesExtrema([null, null]), null);
 /* ---------------------------------------------------------- chart layout */
 const charts = T.airChartsFor(found.map((m) => ({ ...m, value: 1, color: "#000" })));
 eq("one chart per group", charts.map((c) => c.key),
-   ["pm", "co2", "pressure", "temperature", "humidity", "voc", "nox"]);
+   ["climate", "pm", "co2", "pressure", "voc", "nox"]);
+eq("temperature and humidity share the one at the top",
+   chartOfSpec(charts, "climate").series.map((s) => s.key), ["temperature", "humidity"]);
+eq("full width", chartOfSpec(charts, "climate").width, "full");
+// Degrees and a percentage cannot share an axis, so each gets its own scale.
+eq("and each line keeps its own scale", chartOfSpec(charts, "climate").independent, true);
 // The four particle sizes are only meaningful against each other.
 eq("the particle sizes share a chart", chartOfSpec(charts, "pm").series.map((s) => s.key),
    ["pm1", "pm25", "pm4", "pm10"]);
@@ -192,7 +197,7 @@ eq("in ascending size", chartOfSpec(charts, "pm").series.map((s) => s.label),
 eq("the shared chart spans the card", chartOfSpec(charts, "pm").width, "full");
 eq("and carries a legend", chartOfSpec(charts, "pm").legend, true);
 eq("CO₂ gets the full width too", chartOfSpec(charts, "co2").width, "full");
-eq("temperature only needs half", chartOfSpec(charts, "temperature").width, "half");
+eq("an index chart only needs half", chartOfSpec(charts, "voc").width, "half");
 eq("the index charts are pinned to 0-500",
    [chartOfSpec(charts, "voc").lower_bound, chartOfSpec(charts, "voc").upper_bound], [0, 500]);
 function chartOfSpec(list, key) { return list.find((c) => c.key === key); }
@@ -212,7 +217,8 @@ eq("titled after the room", card._els.title.textContent, "Office");
 eq("verdict shown", card._els.verdict.classList.contains("hidden"), false);
 eq("the air is good", card._els.verdictWord.textContent, "Air is good");
 eq("and says why", card._els.verdictWhy.textContent, "Everything measured is within range.");
-eq("seven charts", card._els.chartEls.length, 7);
+eq("six charts", card._els.chartEls.length, 6);
+eq("climate leads", card._els.chartEls[0].spec.key, "climate");
 
 const pm = chartOf(card, "pm");
 eq("four lines on the PM chart", pm.series.length, 4);
@@ -233,8 +239,12 @@ eq("and a thicker line", co2.series[0].line.getAttribute("stroke-width"), "2");
 eq("with the live reading in the header",
    co2.state.children.map((c) => c.textContent), ["413", "ppm"]);
 eq("no legend for a single line", co2.legend.classList.contains("hidden"), true);
-eq("temperature keeps its colour", chartOf(card, "temperature").series[0].metric.color, "#e53935");
-eq("humidity too", chartOf(card, "humidity").series[0].metric.color, "#1e88e5");
+const climate = chartOf(card, "climate");
+eq("temperature keeps its colour", climate.series[0].metric.color, "#e53935");
+eq("humidity too", climate.series[1].metric.color, "#1e88e5");
+eq("both are named in the legend", climate.series.map((s) => s.legendVal.textContent),
+   ["27.9 °C", "42.2 %"]);
+eq("no single headline figure for two units", climate.state.textContent, "");
 eq("pressure too", chartOf(card, "pressure").series[0].metric.color, "#2196f3");
 
 const poor = mk({ area: "office" }, { states: { ...hass.states,
@@ -245,7 +255,7 @@ eq("naming the culprit", poor._els.verdictWhy.textContent, "CO₂ is the highest
 eq("the chart at fault is marked",
    chartOf(poor, "co2").bandDot.classList.contains("hidden"), false);
 eq("a chart that is fine is not",
-   chartOf(poor, "humidity").bandDot.classList.contains("hidden"), true);
+   chartOf(poor, "climate").bandDot.classList.contains("hidden"), true);
 
 /* --------------------------------------------------------------- history */
 const now = Date.now();
@@ -261,6 +271,8 @@ const histHass = {
       "sensor.air_puck_v1_0_co2": trace(400, 12),
       "sensor.air_puck_v1_0_pm2_5": trace(1, 12),
       "sensor.air_puck_v1_0_voc_index": trace(10, 12),
+      "sensor.air_puck_v1_0_air_temperature": trace(20, 12),
+      "sensor.air_puck_v1_0_air_humidity": trace(60, 12),
     });
   },
 };
@@ -300,7 +312,26 @@ eq("a floor the data is already sitting on is dropped",
 // A marker at the very edge would hang outside the plot.
 eq("an edge marker is pulled inside", liveCo2.extMax.style.transform, "translate(-100%, -50%)");
 eq("a sensor with no history is not drawn",
-   chartOf(live, "humidity").plot.classList.contains("hidden"), true);
+   chartOf(live, "pressure").plot.classList.contains("hidden"), true);
+
+// Temperature runs 20-31 and humidity 60-71. On one axis the pair would span
+// 20-71 and each line would use a fifth of the height; on their own scales
+// both fill it, which is the point of putting them together.
+const liveClimate = chartOf(live, "climate");
+eq("each line gets its own scale",
+   liveClimate.series.map((s) => s.bounds), [{ min: 20, max: 31 }, { min: 60, max: 71 }]);
+eq("so the chart has no single axis", liveClimate.bounds, null);
+eq("and no axis labels to mislead",
+   liveClimate.axisMax.classList.contains("hidden"), true);
+eq("both lines reach the top of the box",
+   liveClimate.series.map((s) => s.line.getAttribute("d").includes(",0.00")), [true, true]);
+eq("and the bottom",
+   liveClimate.series.map((s) => s.line.getAttribute("d").includes(",100.00")), [true, true]);
+// The readout is where the real numbers live on a chart like this.
+live._hover(liveClimate, 1);
+eq("hover reads both units", liveClimate.series.map((s) => s.tipVal.textContent),
+   ["31.0 °C", "71.0 %"]);
+live._hover(liveClimate, null);
 
 /* ----------------------------------------------------------------- hover */
 live._hover(liveCo2, 1);
@@ -328,7 +359,7 @@ eq("a shared chart reads out every line",
    livePm.series.map((s) => s.tipVal.textContent),
    ["—", "12.00 μg/m³", "—", "—"]);
 // Hovering the empty start of a series must not report a gap as a reading.
-const blank = chartOf(live, "humidity");
+const blank = chartOf(live, "pressure");
 live._hover(blank, 0.5);
 eq("a chart with no history does not open", blank.el.classList.contains("hovering"), false);
 
@@ -337,11 +368,11 @@ const broken = new T.WabitAirCard();
 broken.setConfig({ area: "office" });
 broken.hass = { ...hass, callWS: () => Promise.reject(new Error("nope")) };
 await new Promise((r) => setTimeout(r, 0));
-eq("a failed history leaves the card standing", broken._els.chartEls.length, 7);
+eq("a failed history leaves the card standing", broken._els.chartEls.length, 6);
 eq("the readings are still there", chartOf(broken, "co2").state.children[0].textContent, "413");
 eq("just no graphs",
    broken._els.chartEls.every((h) => h.plot.classList.contains("hidden")), true);
-eq("no websocket, no trouble", mk({ area: "office" })._els.chartEls.length, 7);
+eq("no websocket, no trouble", mk({ area: "office" })._els.chartEls.length, 6);
 
 /* ---------------------------------------------------------------- config */
 const picked = mk({ area: "office", metrics: ["co2", "pm25"] });
@@ -366,6 +397,11 @@ eq("graphs can be turned off",
 eq("the old option name still turns them off",
    mk({ area: "office", show_sparklines: false })._els.chartEls
      .every((h) => h.plot.classList.contains("hidden")), true);
+eq("the panel behind each graph can be dropped",
+   mk({ area: "office", show_chart_background: false })._els.charts.classList.contains("flat"),
+   true);
+eq("and is drawn by default",
+   mk({ area: "office" })._els.charts.classList.contains("flat"), false);
 eq("the legend can be hidden",
    chartOf(mk({ area: "office", show_legend: false }), "pm")
      .legend.classList.contains("hidden"), true);
