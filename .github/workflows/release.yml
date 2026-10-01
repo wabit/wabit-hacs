@@ -21,6 +21,7 @@ jobs:
       - run: node --check dist/wabit-cards.js
       - run: node test/card.test.mjs
       - run: node test/room-card.test.mjs
+      - run: node test/bin-card.test.mjs
 
       - name: Publish release with the card attached
         env:

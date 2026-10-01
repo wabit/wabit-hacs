@@ -6,6 +6,7 @@ each time.
 
 | Card | What it does |
 | --- | --- |
+| `wabit-bin-collection-card` | Upcoming bin collections, grouped by day so bins that go out together read as one collection. |
 | `wabit-room-lights-card` | Every light in a room, found automatically from its area: pin the ones you use, tuck the rest behind "Show more", with brightness and colour per light. |
 | `wabit-wakeup-card` | Control a sunrise-style wake-up light: set the time per schedule, toggle each schedule on or off, choose which light wakes you, and drag a shared fade length — with a live sunrise ramp while it runs. Set-once options tuck behind a settings button. |
 
@@ -30,6 +31,55 @@ type: module
 ```
 
 Then add the card from the dashboard card picker ("Wabit Wakeup"), or paste YAML.
+
+## `wabit-bin-collection-card`
+
+![Bin collection card, light and dark](https://raw.githubusercontent.com/wabit/wabit-hacs-dashboard/main/docs/preview-bins.png)
+
+```yaml
+type: custom:wabit-bin-collection-card
+entity: sensor.bin_collection
+```
+
+The sensor is expected to carry one attribute per bin, each an object with a `date`
+(`DD/MM/YYYY`) and optionally a `relative_time`. That is the shape the Bolton council
+scraper produces, and the default bin keys — `green`, `grey`, `beige`, `burgundy` — match it.
+
+### Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | string | **required** | `custom:wabit-bin-collection-card` |
+| `entity` | entity | **required** | The sensor holding a per-bin attribute. |
+| `title` | string | `Bin Collection` | Card header. Set to `""` for no header. |
+| `show_hero` | boolean | `true` | The large next-collection panel. With it off, every collection becomes a row. |
+| `bins` | map | the four below | Which attributes to read, and how to label and colour each. |
+
+```yaml
+bins:
+  green:    { label: Garden,        color: "#3fa34d" }
+  grey:     { label: General Waste, color: "#7a7f85" }
+  beige:    { label: Recycling,     color: "#d9b56b" }
+  burgundy: { label: Food Waste,    color: "#7c2740" }
+```
+
+A bin given only a `label` keeps its default colour, and vice versa. Only the keys you
+list are shown, so trimming the map is how you hide a bin you do not have.
+
+### Grouped by day, not by bin
+
+Bins that go out on the same date are one collection, not two rows — the card groups them
+and shows both as chips under a single date. With a fortnightly garden bin and a weekly
+food bin that coincide, that is the difference between reading "Wed 7 Oct: Garden + Food
+Waste" and scanning four rows for matching dates.
+
+The countdown is computed from each `date` rather than taken from `relative_time`, so it
+stays correct on a dashboard left open overnight and cannot drift from the date shown
+beside it. If your feed's own wording disagrees, the date is what the card trusts. A bin
+whose date will not parse still appears, using the sensor's own wording, sorted last.
+
+Today and tomorrow get a solid chip instead of a tonal one, so an imminent collection
+reads differently at a glance.
 
 ## `wabit-room-lights-card`
 
@@ -281,12 +331,14 @@ is what the browser loads.
 node --check dist/wabit-cards.js   # parses
 node test/card.test.mjs            # wakeup card
 node test/room-card.test.mjs       # room lights card
+node test/bin-card.test.mjs        # bin collection card
 ```
 
 Both suites share `test/dom-stub.mjs`, which stubs just enough of the DOM to load the
 bundle in node and drive the real render paths.
 
-`test/preview.html` and `test/preview-room.html` render the cards outside Home Assistant, with stand-ins for
+`test/preview.html`, `test/preview-room.html` and `test/preview-bin.html` render the cards
+outside Home Assistant, with stand-ins for
 `ha-card` / `ha-icon` / `ha-switch` and Material You tokens, on a pinned clock so the
 states stay stable. It is what `docs/preview.png` is captured from - open it in a browser,
 or screenshot it headlessly:

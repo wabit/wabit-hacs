@@ -17,7 +17,14 @@ function mkEl(tag) {
     _handlers: handlers,
     textContent: "",
     title: "",
-    style: {},
+    // Plain property assignment (el.style.display = ...) and setProperty for
+    // custom properties both have to work.
+    style: {
+      _props: {},
+      setProperty(k, v) { this._props[k] = v; },
+      removeProperty(k) { delete this._props[k]; },
+      getPropertyValue(k) { return this._props[k] === undefined ? "" : this._props[k]; },
+    },
     attrs: {},
     get className() { return [...classes].join(" "); },
     set className(v) {
@@ -80,6 +87,9 @@ const EXPORTS = [
   "resolveAreaId", "lightsInArea", "groupMemberIds", "brightnessPct",
   "lightColourCss", "supportsBrightness", "supportsColour", "supportsTemp",
   "kelvinToCss", "WabitRoomLightsCard", "WabitRoomLightsCardEditor",
+  // bin collection card
+  "parseDMY", "daysUntil", "relativeDays", "formatBinDate", "DEFAULT_BINS",
+  "WabitBinCollectionCard", "WabitBinCollectionCardEditor",
 ];
 
 export { mkEl, mkShadow };

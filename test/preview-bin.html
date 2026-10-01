@@ -1,0 +1,197 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Wabit Bin Collection preview</title>
+<style>
+  body {
+    margin: 0; padding: 24px; display: flex; gap: 24px; align-items: flex-start;
+    font-family: Roboto, -apple-system, "Segoe UI", sans-serif;
+    background: #f2eef6;
+  }
+  .pane { width: 400px; }
+  .pane.dark { background: #141218; padding: 16px; border-radius: 20px; }
+  .pane.light { background: #fef7ff; padding: 16px; border-radius: 20px; }
+  .caption { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+             font-weight: 700; margin-bottom: 10px; }
+  .pane.light .caption { color: #6750a4; }
+  .pane.dark .caption { color: #d0bcff; }
+
+  /* Material You token sets, the same names the real themes expose. */
+  .pane.light {
+    --md-sys-color-primary: #6750a4;
+    --md-sys-color-on-surface: #1d1b20;
+    --md-sys-color-on-surface-variant: #49454f;
+    --md-sys-color-surface-container-highest: #e6e0e9;
+    --md-sys-color-primary-container: #eaddff;
+    --md-sys-color-on-primary-container: #21005d;
+    --md-sys-color-outline-variant: #cac4d0;
+    --card-background-color: #fffbfe;
+    --primary-text-color: #1d1b20;
+    --secondary-text-color: #49454f;
+    --primary-color: #6750a4;
+    --rgb-primary-color: 103, 80, 164;
+    --divider-color: #cac4d0;
+  }
+  .pane.dark {
+    --md-sys-color-primary: #d0bcff;
+    --md-sys-color-on-surface: #e6e0e9;
+    --md-sys-color-on-surface-variant: #cac4d0;
+    --md-sys-color-surface-container-highest: #36343b;
+    --md-sys-color-primary-container: #4f378b;
+    --md-sys-color-on-primary-container: #eaddff;
+    --md-sys-color-outline-variant: #49454f;
+    --card-background-color: #211f26;
+    --primary-text-color: #e6e0e9;
+    --secondary-text-color: #cac4d0;
+    --primary-color: #d0bcff;
+    --rgb-primary-color: 208, 188, 255;
+    --divider-color: #49454f;
+  }
+</style>
+</head>
+<body>
+<script>
+/* Stand-ins for the Home Assistant frontend elements the card uses. */
+customElements.define("ha-card", class extends HTMLElement {
+  connectedCallback() {
+    if (this._done) return; this._done = true;
+    const header = this.getAttribute("header");
+    const sr = this.attachShadow({ mode: "open" });
+    sr.innerHTML =
+      '<style>:host{display:block;background:var(--card-background-color);' +
+      'border-radius:var(--ha-card-border-radius,16px);' +
+      'box-shadow:var(--ha-card-box-shadow,0 1px 3px rgba(0,0,0,.18));}' +
+      '.h{font-size:1.3rem;font-weight:400;padding:14px 16px 0;' +
+      'color:var(--md-sys-color-on-surface,var(--primary-text-color));}</style>' +
+      (header ? '<div class="h">' + header + '</div>' : '') + '<slot></slot>';
+  }
+});
+
+const ICONS = {
+  "mdi:chevron-down": "M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z",
+  "mdi:lightbulb":
+    "M12 2a7 7 0 00-4 12.74V17a1 1 0 001 1h6a1 1 0 001-1v-2.26A7 7 0 0012 2zM9.5 19h5v.9A1.6 1.6 0 0112.9 21.5h-1.8A1.6 1.6 0 019.5 19.9V19z",
+  "mdi:lightbulb-group-outline":
+    "M9 2a6 6 0 00-3.4 10.9c.4.3.6.7.6 1.1v1a1 1 0 001 1h3.6a1 1 0 001-1v-1c0-.4.2-.8.6-1.1A6 6 0 009 2zm0 1.8A4.2 4.2 0 0111.4 11.4c-.5.4-.9.9-1.1 1.4H7.7c-.2-.5-.6-1-1.1-1.4A4.2 4.2 0 019 3.8zM7.2 17.1h3.6v.6a1.3 1.3 0 01-1.3 1.3H8.5a1.3 1.3 0 01-1.3-1.3v-.6zM17 7.5a4.5 4.5 0 00-2.2 8.4c.2.1.3.3.3.6v.8a.8.8 0 00.8.8h2.2a.8.8 0 00.8-.8v-.8c0-.3.1-.5.3-.6A4.5 4.5 0 0017 7.5zm-1.2 12h2.4v.4a1 1 0 01-1 1h-.4a1 1 0 01-1-1v-.4z",
+};
+customElements.define("ha-icon", class extends HTMLElement {
+  connectedCallback() {
+    if (this._done) return; this._done = true;
+    const d = ICONS[this.getAttribute("icon")] || "";
+    const sr = this.attachShadow({ mode: "open" });
+    sr.innerHTML =
+      '<style>:host{display:inline-flex;width:var(--mdc-icon-size,24px);' +
+      'height:var(--mdc-icon-size,24px);}svg{width:100%;height:100%;fill:currentColor;}</style>' +
+      '<svg viewBox="0 0 24 24"><path d="' + d + '"></path></svg>';
+  }
+});
+
+customElements.define("ha-entity-picker", class extends HTMLElement {
+  constructor() {
+    super();
+    const sr = this.attachShadow({ mode: "open" });
+    sr.innerHTML =
+      '<style>:host{display:block;}' +
+      '.f{display:flex;align-items:center;gap:8px;background:var(--md-sys-color-surface-container-highest,#e6e0e9);' +
+      'border-radius:999px;padding:7px 12px;font-size:0.95rem;' +
+      'color:var(--md-sys-color-on-surface,var(--primary-text-color));}' +
+      '.v{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '.c{opacity:.6;font-size:0.7rem;}</style>' +
+      '<div class="f"><span class="v"></span><span class="c">&#9660;</span></div>';
+    this._vEl = sr.querySelector(".v");
+  }
+  connectedCallback() { this._paint(); }
+  set hass(h) { this._hass = h; this._paint(); }
+  set value(v) { this._value = v; this._paint(); }
+  get value() { return this._value; }
+  set disabled(v) { this._disabled = !!v; }
+  get disabled() { return this._disabled; }
+  _paint() {
+    if (!this._vEl) return;
+    const st = this._hass && this._value ? this._hass.states[this._value] : null;
+    this._vEl.textContent = st
+      ? (st.attributes.friendly_name || this._value)
+      : (this._value || "");
+  }
+});
+
+customElements.define("ha-switch", class extends HTMLElement {
+  constructor() {
+    super();
+    this._checked = false; this._disabled = false;
+    const sr = this.attachShadow({ mode: "open" });
+    sr.innerHTML =
+      '<style>:host{display:inline-block;width:52px;height:32px;}' +
+      '.t{width:52px;height:32px;border-radius:999px;position:relative;' +
+      'transition:background 180ms,border-color 180ms;box-sizing:border-box;}' +
+      '.k{position:absolute;top:50%;border-radius:50%;transition:all 180ms;}</style>' +
+      '<div class="t"><div class="k"></div></div>';
+    this._t = sr.querySelector(".t"); this._k = sr.querySelector(".k");
+    // NB: no this.style / attribute writes here - a custom element constructor
+    // must not touch its own attributes, and Chrome aborts it if you do.
+  }
+  connectedCallback() { this._paint(); }
+  set checked(v) { this._checked = !!v; this._paint(); }
+  get checked() { return this._checked; }
+  set disabled(v) { this._disabled = !!v; this._paint(); }
+  get disabled() { return this._disabled; }
+  _paint() {
+    if (!this._t) return;
+    const on = this._checked;
+    const accent = "var(--md-sys-color-primary, var(--primary-color))";
+    this._t.style.background = on ? accent : "var(--md-sys-color-surface-container-highest,#e6e0e9)";
+    this._t.style.border = on ? "2px solid transparent" : "2px solid var(--md-sys-color-outline-variant,#79747e)";
+    this._t.style.opacity = this._disabled ? "0.45" : "1";
+    this._k.style.width = on ? "24px" : "16px";
+    this._k.style.height = on ? "24px" : "16px";
+    this._k.style.left = on ? "24px" : "8px";
+    this._k.style.transform = "translateY(-50%)";
+    this._k.style.background = on ? "#ffffff" : "var(--md-sys-color-outline-variant,#79747e)";
+  }
+});
+</script>
+
+<script src="../dist/wabit-cards.js"></script>
+
+<script>
+// Pinned so the dates and countdowns are stable between runs.
+const Real = Date;
+globalThis.Date = class extends Real {
+  constructor(...a) { return a.length ? new Real(...a) : new Real(2026, 9, 1, 9, 0, 0); }
+  static now() { return new Real(2026, 9, 1, 9, 0, 0).getTime(); }
+};
+
+const BINS = {
+  green:    { date: "07/10/2026", relative_time: "in 5 days" },
+  grey:     { date: "14/10/2026", relative_time: "in 12 days" },
+  beige:    { date: "21/10/2026", relative_time: "in 19 days" },
+  burgundy: { date: "07/10/2026", relative_time: "in 5 days" },
+};
+const SOON = { ...BINS, green: { date: "02/10/2026", relative_time: "tomorrow" },
+                        burgundy: { date: "02/10/2026", relative_time: "tomorrow" } };
+
+function makeHass(dark, attrs) {
+  return {
+    themes: { darkMode: dark },
+    states: { "sensor.bin_collection": { state: "ok",
+      attributes: { ...attrs, friendly_name: "Bin Collection" } } },
+    callService: () => {},
+  };
+}
+
+function mount(paneClass, caption, dark, attrs) {
+  const pane = document.createElement("div");
+  pane.className = "pane " + paneClass;
+  const cap = document.createElement("div");
+  cap.className = "caption";
+  cap.textContent = caption;
+  pane.appendChild(cap);
+  const card = document.createElement("wabit-bin-collection-card");
+  pane.appendChild(card);
+  document.body.appendChild(pane);
+  card.setConfig({ entity: "sensor.bin_collection" });
+  card.hass = makeHass(dark, attrs);
+}
+
+mount("light", "Two bins share the next collection", false, BINS);
+mount("dark", "Going out tomorrow", true, SOON);
+</script>
+</body></html>

@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.4.0";
+const VERSION = "1.5.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -2359,6 +2359,619 @@ if (!window.customCards.some((c) => c.type === "wabit-room-lights-card")) {
     description:
       "Every light in a room, found automatically: pin the ones you use, tuck the " +
       "rest behind Show more, with brightness and colour per light.",
+    preview: true,
+    documentationURL: REPO,
+  });
+}
+
+/* ---------------------------------------------- wabit-bin-collection-card */
+
+const DEFAULT_BINS = {
+  green: { label: "Garden", color: "#3fa34d" },
+  grey: { label: "General Waste", color: "#7a7f85" },
+  beige: { label: "Recycling", color: "#d9b56b" },
+  burgundy: { label: "Food Waste", color: "#7c2740" },
+};
+
+/** "07/10/2026" (DD/MM/YYYY) -> Date at local midnight, or null. */
+function parseDMY(raw) {
+  if (typeof raw !== "string") return null;
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(raw.trim());
+  if (!m) return null;
+  const d = Number(m[1]);
+  const mo = Number(m[2]);
+  const y = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const date = new Date(y, mo - 1, d);
+  // Rejects things like 31/02, which Date would silently roll over.
+  if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d) {
+    return null;
+  }
+  return date;
+}
+
+/** Whole days from today to `date`, both taken at local midnight. */
+function daysUntil(date, now) {
+  const a = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const b = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((a - b) / 86400000);
+}
+
+function relativeDays(days) {
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  if (days < 0) return days === -1 ? "Yesterday" : `${-days} days ago`;
+  return `in ${days} days`;
+}
+
+function formatBinDate(date) {
+  try {
+    return date.toLocaleDateString(undefined, {
+      weekday: "short", day: "numeric", month: "short",
+    });
+  } catch (e) {
+    return date.toDateString();
+  }
+}
+
+const BIN_STYLES = `
+  :host {
+    display: block;
+    --wc-text: var(--md-sys-color-on-surface, var(--primary-text-color, #212121));
+    --wc-muted: var(--md-sys-color-on-surface-variant, var(--secondary-text-color, #727272));
+    --wc-accent: var(--md-sys-color-primary, var(--primary-color, #3f51b5));
+    --wc-tonal: var(--md-sys-color-surface-container-highest,
+                 rgba(var(--rgb-primary-text-color, 33, 33, 33), 0.08));
+    --wc-outline: var(--md-sys-color-outline-variant, var(--divider-color, #e0e0e0));
+    --wc-accent-tonal: var(--md-sys-color-primary-container,
+                        rgba(var(--rgb-primary-color, 63, 81, 181), 0.16));
+    --wc-on-accent-tonal: var(--md-sys-color-on-primary-container, var(--wc-accent));
+  }
+  ha-card { overflow: hidden; }
+  .body { padding: 16px; }
+  .body.tight { padding-top: 4px; }
+
+  .header { padding: 12px 16px 4px; }
+  .title {
+    color: var(--ha-card-header-color, var(--wc-text));
+    font-family: var(--ha-card-header-font-family, inherit);
+    font-size: var(--ha-card-header-font-size, 24px);
+    font-weight: 400; letter-spacing: -0.012em; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* ------------------------------------------------------------- hero */
+  .hero { padding: 2px 0 14px; }
+  .hero.hidden { display: none; }
+  .eyebrow {
+    font-size: 0.7rem; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--wc-muted); font-weight: 600;
+  }
+  .hero-main { display: flex; align-items: baseline; gap: 10px; margin-top: 2px; }
+  .hero-date {
+    font-size: 1.9rem; font-weight: 300; line-height: 1.1;
+    letter-spacing: -0.02em; color: var(--wc-text); flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .hero-when {
+    font-size: 0.78rem; font-weight: 600; white-space: nowrap;
+    color: var(--wc-on-accent-tonal); background: var(--wc-accent-tonal);
+    padding: 4px 10px; border-radius: 999px; align-self: center;
+  }
+  .hero.soon .hero-when { background: var(--wc-accent); color: var(--card-background-color, #fff); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--wc-tonal); border-radius: 999px;
+    padding: 5px 12px 5px 8px; font-size: 0.85rem; color: var(--wc-text);
+  }
+  .dot {
+    width: 12px; height: 12px; border-radius: 50%; flex: none;
+    background: var(--bin, var(--wc-accent));
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+  }
+
+  /* ------------------------------------------------------------- rows */
+  .row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 0; border-top: 1px solid var(--wc-outline);
+  }
+  .bars { display: flex; gap: 3px; flex: none; }
+  .bar {
+    width: 6px; height: 30px; border-radius: 3px;
+    background: var(--bin, var(--wc-accent));
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+  }
+  .row-main { flex: 1; min-width: 0; }
+  .row-label {
+    color: var(--wc-text); font-size: 0.95rem; line-height: 1.35;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .row-date { color: var(--wc-muted); font-size: 0.78rem; line-height: 1.35; }
+  .row-when {
+    color: var(--wc-muted); font-size: 0.8rem; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .empty, .error { font-size: 0.9rem; line-height: 1.5; padding: 6px 0; }
+  .empty { color: var(--wc-muted); }
+  .error { color: var(--error-color, #db4437); }
+`;
+
+class WabitBinCollectionCard extends HTMLElement {
+  static getConfigElement() {
+    return document.createElement("wabit-bin-collection-card-editor");
+  }
+
+  static getStubConfig(hass) {
+    const ids = Object.keys((hass && hass.states) || {});
+    const found = ids.find(
+      (e) => e.startsWith("sensor.") && /bin|waste|refuse|recycl/.test(e)
+    );
+    return { type: "custom:wabit-bin-collection-card", entity: found || "sensor.bin_collection" };
+  }
+
+  setConfig(config) {
+    const cfg = config || {};
+    if (isUnset(cfg.entity)) {
+      throw new Error("wabit-bin-collection-card: `entity` is required");
+    }
+    if (!String(cfg.entity).startsWith("sensor.")) {
+      throw new Error("wabit-bin-collection-card: `entity` must be a sensor");
+    }
+    const bins = {};
+    const src = cfg.bins && typeof cfg.bins === "object" ? cfg.bins : DEFAULT_BINS;
+    for (const [key, v] of Object.entries(src)) {
+      const def = DEFAULT_BINS[key] || {};
+      bins[key] = {
+        label: (v && v.label) || def.label || key,
+        color: (v && v.color) || def.color || "#9e9e9e",
+      };
+    }
+    if (!Object.keys(bins).length) {
+      throw new Error("wabit-bin-collection-card: `bins` must list at least one bin");
+    }
+
+    this._config = {
+      entity: cfg.entity,
+      title: cfg.title === undefined ? "Bin Collection" : cfg.title,
+      bins,
+      show_hero: cfg.show_hero !== false,
+      // `glass` and `glassOpacity` from the previous card are accepted and ignored,
+      // so an existing config keeps working after switching card type.
+    };
+
+    this._built = false;
+    this._rowsKey = null;
+    if (this.shadowRoot) this.shadowRoot.innerHTML = "";
+    if (this._hass) this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._config) this._render();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  connectedCallback() {
+    // "in 5 days" must not go stale if the dashboard is left open overnight.
+    this._tick = window.setInterval(() => {
+      if (this._built && this._hass) this._render();
+    }, 300000);
+  }
+
+  disconnectedCallback() {
+    if (this._tick) window.clearInterval(this._tick);
+    this._tick = null;
+  }
+
+  getCardSize() {
+    const m = this._lastModel;
+    if (!m || m.error) return 3;
+    return 1 + (this._config.show_hero ? 2 : 0) + m.rows.length;
+  }
+
+  /** Bins grouped by collection day, soonest first. */
+  _model() {
+    const hass = this._hass;
+    const cfg = this._config;
+    const st = hass.states[cfg.entity];
+    if (!st) return { error: `${cfg.entity} is not available.` };
+
+    const attrs = st.attributes || {};
+    const now = new Date();
+    const items = [];
+    for (const [key, conf] of Object.entries(cfg.bins)) {
+      const data = attrs[key];
+      if (!data || typeof data !== "object") continue;
+      const date = parseDMY(data.date);
+      items.push({
+        key,
+        label: conf.label,
+        color: conf.color,
+        raw: data.date,
+        date,
+        days: date ? daysUntil(date, now) : null,
+        fallback: data.relative_time,
+      });
+    }
+    if (!items.length) {
+      return { empty: `No bin data in ${cfg.entity}.` };
+    }
+
+    // Two bins on the same day are one collection, not two rows.
+    const groups = new Map();
+    for (const it of items) {
+      const key = it.date
+        ? `${it.date.getFullYear()}-${it.date.getMonth()}-${it.date.getDate()}`
+        : `raw:${it.raw}`;
+      if (!groups.has(key)) {
+        groups.set(key, { date: it.date, raw: it.raw, days: it.days, fallback: it.fallback, bins: [] });
+      }
+      groups.get(key).bins.push(it);
+    }
+
+    const list = [...groups.values()].sort((a, b) => {
+      if (a.date && b.date) return a.date - b.date;
+      if (a.date) return -1; // undated entries sort last
+      if (b.date) return 1;
+      return 0;
+    });
+
+    const hero = this._config.show_hero ? list[0] : null;
+    return { groups: list, hero, rows: hero ? list.slice(1) : list };
+  }
+
+  _label(group) {
+    return group.bins.map((b) => b.label).join(" + ");
+  }
+
+  _when(group) {
+    return group.days === null || group.days === undefined
+      ? group.fallback || ""
+      : relativeDays(group.days);
+  }
+
+  _render() {
+    if (!this._config || !this._hass) return;
+    if (!this._built) this._build();
+    const model = this._model();
+    this._lastModel = model;
+
+    const { error, empty, hero, rows } = this._els;
+
+    if (model.error || model.empty) {
+      error.textContent = model.error || "";
+      error.style.display = model.error ? "" : "none";
+      empty.textContent = model.empty || "";
+      empty.style.display = model.empty ? "" : "none";
+      hero.classList.add("hidden");
+      rows.innerHTML = "";
+      this._rowsKey = null;
+      return;
+    }
+    error.style.display = "none";
+    empty.style.display = "none";
+
+    this._renderHero(model);
+
+    const key = JSON.stringify(
+      model.rows.map((g) => [g.raw, g.days, g.bins.map((b) => b.key)])
+    );
+    if (key !== this._rowsKey) {
+      this._rowsKey = key;
+      this._renderRows(model);
+    }
+  }
+
+  _renderHero(model) {
+    const h = this._els;
+    if (!this._config.show_hero || !model.hero) {
+      h.hero.classList.add("hidden");
+      return;
+    }
+    const g = model.hero;
+    h.hero.classList.remove("hidden");
+    h.heroDate.textContent = g.date ? formatBinDate(g.date) : g.raw || "Unknown date";
+    h.heroWhen.textContent = this._when(g);
+    // Today and tomorrow earn a solid chip; anything further out stays tonal.
+    h.hero.classList.toggle("soon", g.days !== null && g.days <= 1);
+
+    h.chips.innerHTML = "";
+    g.bins.forEach((b) => {
+      const chip = document.createElement("div");
+      chip.className = "chip";
+      const dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.setProperty("--bin", b.color);
+      const label = document.createElement("span");
+      label.textContent = b.label;
+      chip.append(dot, label);
+      h.chips.appendChild(chip);
+    });
+  }
+
+  _renderRows(model) {
+    const host = this._els.rows;
+    host.innerHTML = "";
+    model.rows.forEach((g) => {
+      const row = document.createElement("div");
+      row.className = "row";
+
+      const bars = document.createElement("div");
+      bars.className = "bars";
+      g.bins.forEach((b) => {
+        const bar = document.createElement("span");
+        bar.className = "bar";
+        bar.style.setProperty("--bin", b.color);
+        bar.title = b.label;
+        bars.appendChild(bar);
+      });
+
+      const main = document.createElement("div");
+      main.className = "row-main";
+      const label = document.createElement("div");
+      label.className = "row-label";
+      label.textContent = this._label(g);
+      const date = document.createElement("div");
+      date.className = "row-date";
+      date.textContent = g.date ? formatBinDate(g.date) : g.raw || "";
+      main.append(label, date);
+
+      const when = document.createElement("div");
+      when.className = "row-when";
+      when.textContent = this._when(g);
+
+      row.append(bars, main, when);
+      host.appendChild(row);
+    });
+  }
+
+  _build() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = BIN_STYLES;
+    root.appendChild(style);
+
+    const card = document.createElement("ha-card");
+    root.appendChild(card);
+
+    if (this._config.title) {
+      const header = document.createElement("div");
+      header.className = "header";
+      const title = document.createElement("div");
+      title.className = "title";
+      title.textContent = this._config.title;
+      header.appendChild(title);
+      card.appendChild(header);
+    }
+
+    const body = document.createElement("div");
+    body.className = this._config.title ? "body tight" : "body";
+    card.appendChild(body);
+
+    const error = document.createElement("div");
+    error.className = "error";
+    error.style.display = "none";
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.style.display = "none";
+    body.append(error, empty);
+
+    const hero = document.createElement("div");
+    hero.className = "hero";
+    const eyebrow = document.createElement("div");
+    eyebrow.className = "eyebrow";
+    eyebrow.textContent = "Next collection";
+    const main = document.createElement("div");
+    main.className = "hero-main";
+    const heroDate = document.createElement("div");
+    heroDate.className = "hero-date";
+    const heroWhen = document.createElement("div");
+    heroWhen.className = "hero-when";
+    main.append(heroDate, heroWhen);
+    const chips = document.createElement("div");
+    chips.className = "chips";
+    hero.append(eyebrow, main, chips);
+    body.appendChild(hero);
+
+    const rows = document.createElement("div");
+    rows.className = "rows";
+    body.appendChild(rows);
+
+    this._els = { error, empty, hero, heroDate, heroWhen, chips, rows };
+    this._built = true;
+  }
+}
+
+/* --------------------------------------- wabit-bin-collection-card-editor */
+
+const BIN_LABELS = {
+  entity: "Bin sensor",
+  title: "Card title (leave empty for no header)",
+  show_hero: "Show the next-collection panel",
+};
+
+const BIN_SCHEMA = [
+  { name: "entity", required: true, selector: { entity: { domain: "sensor" } } },
+  { name: "title", selector: { text: {} } },
+  { name: "show_hero", selector: { boolean: {} } },
+];
+
+const BIN_EDITOR_STYLES = `
+  :host { display: block; }
+  .section { margin: 16px 0 4px; }
+  .section-title {
+    font-size: 0.95rem; font-weight: 600; color: var(--primary-text-color);
+    margin-bottom: 2px;
+  }
+  .hint {
+    font-size: 0.78rem; color: var(--secondary-text-color);
+    line-height: 1.45; margin-bottom: 8px;
+  }
+  .bin-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  }
+  .bin-key {
+    flex: 0 0 84px; font-size: 0.78rem; text-transform: capitalize;
+    color: var(--secondary-text-color);
+  }
+  .bin-row input[type="text"] {
+    flex: 1; min-width: 0; font: inherit; font-size: 0.9rem; padding: 8px 10px;
+    border-radius: 10px; border: 1px solid var(--divider-color);
+    background: var(--card-background-color); color: var(--primary-text-color);
+  }
+  .bin-row input[type="color"] {
+    flex: none; width: 40px; height: 34px; padding: 2px; cursor: pointer;
+    border: 1px solid var(--divider-color); border-radius: 10px; background: none;
+  }
+  .note {
+    padding: 12px; border-radius: 12px; line-height: 1.5;
+    background: rgba(var(--rgb-primary-color, 63, 81, 181), 0.08);
+    color: var(--primary-text-color); font-size: 0.9rem;
+  }
+`;
+
+class WabitBinCollectionCardEditor extends HTMLElement {
+  setConfig(config) {
+    this._config = { ...(config || {}) };
+    if (!this._config.bins) this._config.bins = { ...DEFAULT_BINS };
+    if (!this._built) this._build();
+    this._renderBins();
+    this._push();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._push();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  _emit() {
+    fireEvent(this, "config-changed", { config: this._config });
+  }
+
+  _setBin(key, patch) {
+    const bins = { ...this._config.bins, [key]: { ...this._config.bins[key], ...patch } };
+    this._config = { ...this._config, bins };
+    this._emit();
+  }
+
+  _build() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = BIN_EDITOR_STYLES;
+    root.appendChild(style);
+
+    if (!customElements.get("ha-form")) {
+      const note = document.createElement("div");
+      note.className = "note";
+      note.textContent =
+        "This Home Assistant build does not provide ha-form, so the visual editor " +
+        "is unavailable. Configure this card in YAML instead - the options are " +
+        "documented at " + REPO;
+      root.appendChild(note);
+      this._form = null;
+      this._built = true;
+      return;
+    }
+
+    const form = document.createElement("ha-form");
+    form.schema = BIN_SCHEMA;
+    form.computeLabel = (s) => BIN_LABELS[s.name] || s.name;
+    form.addEventListener("value-changed", (ev) => {
+      ev.stopPropagation();
+      this._config = { ...this._config, ...ev.detail.value };
+      this._emit();
+    });
+    root.appendChild(form);
+
+    const section = document.createElement("div");
+    section.className = "section";
+    const title = document.createElement("div");
+    title.className = "section-title";
+    title.textContent = "Bins";
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    hint.textContent =
+      "One row per attribute on the sensor. The colour is used for the dot and " +
+      "bar next to each collection.";
+    const list = document.createElement("div");
+    list.className = "bin-list";
+    section.append(title, hint, list);
+    root.appendChild(section);
+
+    this._form = form;
+    this._els = { list };
+    this._built = true;
+  }
+
+  _renderBins() {
+    if (!this._els) return;
+    const list = this._els.list;
+    list.innerHTML = "";
+    Object.entries(this._config.bins).forEach(([key, conf]) => {
+      const row = document.createElement("div");
+      row.className = "bin-row";
+
+      const name = document.createElement("span");
+      name.className = "bin-key";
+      name.textContent = key;
+
+      const label = document.createElement("input");
+      label.type = "text";
+      label.value = conf.label || "";
+      label.placeholder = key;
+      label.addEventListener("change", () => this._setBin(key, { label: label.value }));
+
+      const colour = document.createElement("input");
+      colour.type = "color";
+      colour.value = conf.color || "#9e9e9e";
+      colour.addEventListener("change", () => this._setBin(key, { color: colour.value }));
+
+      row.append(name, label, colour);
+      list.appendChild(row);
+    });
+  }
+
+  _push() {
+    if (!this._form || !this._hass || !this._config) return;
+    this._form.hass = this._hass;
+    const data = {
+      entity: this._config.entity,
+      title: this._config.title === undefined ? "Bin Collection" : this._config.title,
+      show_hero: this._config.show_hero !== false,
+    };
+    if (JSON.stringify(this._form.data) !== JSON.stringify(data)) this._form.data = data;
+  }
+}
+
+if (!customElements.get("wabit-bin-collection-card")) {
+  customElements.define("wabit-bin-collection-card", WabitBinCollectionCard);
+}
+if (!customElements.get("wabit-bin-collection-card-editor")) {
+  customElements.define("wabit-bin-collection-card-editor", WabitBinCollectionCardEditor);
+}
+
+if (!window.customCards.some((c) => c.type === "wabit-bin-collection-card")) {
+  window.customCards.push({
+    type: "wabit-bin-collection-card",
+    name: "Wabit Bin Collection",
+    description:
+      "Upcoming bin collections, grouped by day so bins that go out together read " +
+      "as one collection.",
     preview: true,
     documentationURL: REPO,
   });
