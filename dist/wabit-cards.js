@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.15.1";
+const VERSION = "1.16.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -5212,6 +5212,671 @@ if (!window.customCards.some((c) => c.type === "wabit-f1-card")) {
     description:
       "The next Grand Prix: where, when, the circuit layout, the session times " +
       "and the weather at the track.",
+    preview: true,
+    documentationURL: REPO,
+  });
+}
+
+/* --------------------------------------------------------- wabit-air-card */
+
+/**
+ * The metrics an air sensor might report, in the order they are worth reading.
+ * Matched on device class, with a name test where a class is ambiguous: VOC and
+ * NOx indexes are both `aqi`, so the class alone cannot tell them apart.
+ */
+const AIR_METRICS = [
+  { key: "co2", label: "CO₂", classes: ["carbon_dioxide"], icon: "mdi:molecule-co2" },
+  { key: "pm25", label: "PM2.5", classes: ["pm25"], match: /pm_?2_?5/i, icon: "mdi:blur" },
+  { key: "pm10", label: "PM10", classes: ["pm10"], match: /pm_?10/i, icon: "mdi:blur" },
+  { key: "pm1", label: "PM1", classes: ["pm1"], match: /pm_?1(_?0)?(?!\d)/i, icon: "mdi:blur" },
+  { key: "pm4", label: "PM4", classes: ["pm25", "pm10", "pm1", null], match: /pm_?4/i, icon: "mdi:blur" },
+  { key: "voc", label: "VOC", classes: ["aqi"], match: /voc/i, icon: "mdi:air-filter" },
+  { key: "nox", label: "NOx", classes: ["aqi"], match: /nox/i, icon: "mdi:air-filter" },
+  { key: "temperature", label: "Temp", classes: ["temperature"], icon: "mdi:thermometer" },
+  { key: "humidity", label: "Humidity", classes: ["humidity"], icon: "mdi:water-percent" },
+  { key: "pressure", label: "Pressure", classes: ["atmospheric_pressure", "pressure"], icon: "mdi:gauge" },
+];
+
+/**
+ * Where each metric stops being good and starts being poor. Only the three that
+ * say something about air quality get a verdict; temperature, humidity and
+ * pressure are reported but never judged.
+ */
+const AIR_THRESHOLDS = {
+  co2: [800, 1200],     // ppm: fresh indoor air is ~400-800
+  pm25: [12, 35],       // µg/m³, WHO-ish daily guidance
+  pm10: [45, 100],
+  pm1: [12, 35],
+  voc: [150, 250],      // Sensirion index, 100 is the running average
+  nox: [150, 250],
+};
+
+const AIR_BANDS = ["good", "fair", "poor"];
+
+/** Which band a reading falls in, or null for metrics that are not judged. */
+function airBand(key, value, thresholds) {
+  const t = (thresholds || AIR_THRESHOLDS)[key];
+  if (!t || typeof value !== "number" || Number.isNaN(value)) return null;
+  if (value <= t[0]) return "good";
+  if (value <= t[1]) return "fair";
+  return "poor";
+}
+
+/** The worst band across the judged metrics, and what drove it. */
+function airVerdict(metrics, thresholds) {
+  let worst = null;
+  let driver = null;
+  for (const m of metrics) {
+    const band = airBand(m.key, m.value, thresholds);
+    if (!band) continue;
+    if (!worst || AIR_BANDS.indexOf(band) > AIR_BANDS.indexOf(worst)) {
+      worst = band;
+      driver = m;
+    }
+  }
+  return { band: worst, driver };
+}
+
+/** Air sensors belonging to an area, one per metric. */
+function airSensorsInArea(hass, areaId) {
+  const entities = (hass && hass.entities) || {};
+  const devices = (hass && hass.devices) || {};
+  const candidates = [];
+  for (const [id, ent] of Object.entries(entities)) {
+    if (!id.startsWith("sensor.")) continue;
+    if (ent.entity_category || ent.hidden || ent.hidden_by || ent.disabled_by) continue;
+    const device = ent.device_id ? devices[ent.device_id] : null;
+    const area = ent.area_id || (device ? device.area_id : null);
+    if (area !== areaId) continue;
+    const st = hass.states[id];
+    if (!st) continue;
+    candidates.push({ id, st });
+  }
+  return matchAirMetrics(candidates);
+}
+
+/** Pairs candidate sensors to metrics, keeping the first match for each. */
+function matchAirMetrics(candidates) {
+  const out = [];
+  const taken = new Set();
+  for (const metric of AIR_METRICS) {
+    for (const { id, st } of candidates) {
+      if (taken.has(id)) continue;
+      const dc = (st.attributes || {}).device_class || null;
+      if (!metric.classes.includes(dc)) continue;
+      // A name test is required wherever the device class is shared.
+      if (metric.match && !metric.match.test(id)) continue;
+      taken.add(id);
+      out.push({ ...metric, id, st });
+      break;
+    }
+  }
+  return out;
+}
+
+/** Significant figures HA suggests for a sensor, falling back on the value. */
+function airPrecision(hass, id, value) {
+  const reg = (hass.entities || {})[id];
+  if (reg && typeof reg.display_precision === "number") return reg.display_precision;
+  if (Math.abs(value) >= 100) return 0;
+  if (Math.abs(value) >= 10) return 1;
+  return 2;
+}
+
+/** An SVG path across a series of numbers, normalised to the box. */
+function sparklinePath(values, width, height) {
+  const pts = values.filter((v) => typeof v === "number" && !Number.isNaN(v));
+  if (pts.length < 2) return null;
+  let min = Math.min(...pts);
+  let max = Math.max(...pts);
+  if (max - min < 1e-9) {
+    // A flat line would divide by zero; park it in the middle instead.
+    min -= 0.5;
+    max += 0.5;
+  }
+  const step = width / (pts.length - 1);
+  return pts
+    .map((v, i) => {
+      const x = (i * step).toFixed(2);
+      const y = (height - ((v - min) / (max - min)) * height).toFixed(2);
+      return `${i ? "L" : "M"}${x},${y}`;
+    })
+    .join(" ");
+}
+
+const AIR_STYLES = `
+  :host {
+    display: block;
+    --wc-text: var(--md-sys-color-on-surface, var(--primary-text-color, #212121));
+    --wc-muted: var(--md-sys-color-on-surface-variant, var(--secondary-text-color, #727272));
+    --wc-accent: var(--md-sys-color-primary, var(--primary-color, #3f51b5));
+    --wc-tonal: var(--md-sys-color-surface-container-highest,
+                 rgba(var(--rgb-primary-text-color, 33, 33, 33), 0.08));
+    --wc-outline: var(--md-sys-color-outline-variant, var(--divider-color, #e0e0e0));
+    /* Judgement colours are literal: green, amber and red mean the same thing
+       in every theme, and a themed accent would not carry the meaning. */
+    --wc-good: #2e9b57;
+    --wc-fair: #c88a1a;
+    --wc-poor: #cf4436;
+  }
+  ha-card { overflow: hidden; }
+  .header { padding: 12px 16px 4px; }
+  .title {
+    color: var(--ha-card-header-color, var(--wc-text));
+    font-family: var(--ha-card-header-font-family, inherit);
+    font-size: var(--ha-card-header-font-size, 24px);
+    font-weight: 400; letter-spacing: -0.012em; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .body { padding: 12px 16px 16px; }
+  .body.tight { padding-top: 4px; }
+
+  /* --------------------------------------------------------- the verdict */
+  .verdict { display: flex; align-items: center; gap: 12px; }
+  .verdict.hidden { display: none; }
+  .dot {
+    width: 14px; height: 14px; border-radius: 50%; flex: none;
+    background: var(--band, var(--wc-muted));
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--band, #888) 22%, transparent);
+  }
+  .verdict-main { flex: 1; min-width: 0; }
+  .verdict-word {
+    font-size: 1.35rem; font-weight: 500; line-height: 1.2;
+    color: var(--band, var(--wc-text));
+  }
+  .verdict-why { color: var(--wc-muted); font-size: 0.82rem; margin-top: 2px; }
+
+  /* --------------------------------------------------------- the metrics */
+  .grid {
+    display: grid; gap: 8px; margin-top: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  }
+  .metric {
+    border-radius: 12px; padding: 10px; background: var(--wc-tonal);
+    min-width: 0;
+  }
+  .metric-head { display: flex; align-items: center; gap: 6px; }
+  .metric-head .icon { --mdc-icon-size: 16px; color: var(--band, var(--wc-muted)); flex: none; }
+  .metric-label {
+    font-size: 0.68rem; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--wc-muted); font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .metric-value {
+    margin-top: 3px; color: var(--wc-text); font-size: 1.12rem; line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .metric-value .unit { font-size: 0.72rem; color: var(--wc-muted); margin-left: 2px; }
+  .metric.judged .metric-value { color: var(--band, var(--wc-text)); }
+  .spark { display: block; width: 100%; height: 22px; margin-top: 6px; }
+  .spark.hidden { display: none; }
+  .spark path { fill: none; stroke: var(--band, var(--wc-muted)); stroke-width: 1.6;
+    stroke-linecap: round; stroke-linejoin: round; opacity: 0.85; }
+
+  .empty, .error { font-size: 0.9rem; line-height: 1.5; padding: 4px 0; }
+  .empty { color: var(--wc-muted); }
+  .error { color: var(--error-color, #db4437); }
+`;
+
+class WabitAirCard extends HTMLElement {
+  static getConfigElement() {
+    return document.createElement("wabit-air-card-editor");
+  }
+
+  static getStubConfig(hass) {
+    const areas = (hass && hass.areas) || {};
+    let best = null;
+    for (const id of Object.keys(areas)) {
+      const n = airSensorsInArea(hass, id).length;
+      if (n && (!best || n > best.n)) best = { id, n };
+    }
+    return { type: "custom:wabit-air-card", area: best ? best.id : "" };
+  }
+
+  setConfig(config) {
+    const cfg = config || {};
+    if (isUnset(cfg.area) && !(Array.isArray(cfg.entities) && cfg.entities.length)) {
+      throw new Error("wabit-air-card: either `area` or `entities` is required");
+    }
+    (cfg.entities || []).forEach((e) => {
+      if (typeof e !== "string" || !e.startsWith("sensor.")) {
+        throw new Error(`wabit-air-card: \`entities\` may only contain sensors, got "${e}"`);
+      }
+    });
+    if (cfg.metrics !== undefined && !Array.isArray(cfg.metrics)) {
+      throw new Error("wabit-air-card: `metrics` must be a list of metric names");
+    }
+    const hours = Number(cfg.hours);
+
+    this._config = {
+      area: isUnset(cfg.area) ? null : String(cfg.area),
+      entities: Array.isArray(cfg.entities) && cfg.entities.length ? cfg.entities : null,
+      metrics: Array.isArray(cfg.metrics) ? cfg.metrics : null,
+      title: cfg.title,
+      show_header: cfg.show_header !== false,
+      show_verdict: cfg.show_verdict !== false,
+      show_sparklines: cfg.show_sparklines !== false,
+      hours: Number.isFinite(hours) && hours > 0 ? Math.min(hours, 168) : 12,
+      thresholds: { ...AIR_THRESHOLDS, ...(cfg.thresholds || {}) },
+    };
+
+    this._built = false;
+    this._gridKey = null;
+    this._history = null;
+    this._historyAt = 0;
+    if (this.shadowRoot) this.shadowRoot.innerHTML = "";
+    if (this._hass) this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._config) this._render();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  connectedCallback() {
+    this._tick = window.setInterval(() => {
+      if (this._built && this._hass) this._refreshHistory();
+    }, 300000);
+  }
+
+  disconnectedCallback() {
+    if (this._tick) window.clearInterval(this._tick);
+    this._tick = null;
+  }
+
+  getCardSize() {
+    const m = this._lastModel;
+    return 2 + Math.ceil(((m && m.metrics.length) || 6) / 2);
+  }
+
+  _model() {
+    const hass = this._hass;
+    const cfg = this._config;
+
+    let metrics;
+    if (cfg.entities) {
+      metrics = matchAirMetrics(
+        cfg.entities.filter((id) => hass.states[id]).map((id) => ({ id, st: hass.states[id] }))
+      );
+    } else {
+      if (!hass.entities || !hass.areas) {
+        return { error: "This Home Assistant build does not expose the area registry to cards." };
+      }
+      const areaId = resolveAreaId(hass, cfg.area);
+      if (!areaId) return { error: `No area called "${cfg.area}".` };
+      metrics = airSensorsInArea(hass, areaId);
+      this._areaName = (hass.areas[areaId] || {}).name || cfg.area;
+    }
+
+    if (cfg.metrics) {
+      const wanted = cfg.metrics;
+      metrics = wanted
+        .map((k) => metrics.find((m) => m.key === k))
+        .filter(Boolean);
+    }
+
+    const read = metrics.map((m) => {
+      const raw = Number(m.st.state);
+      const value = Number.isFinite(raw) ? raw : null;
+      return {
+        ...m,
+        value,
+        unit: (m.st.attributes || {}).unit_of_measurement || "",
+        band: airBand(m.key, value, cfg.thresholds),
+      };
+    });
+
+    return { metrics: read, verdict: airVerdict(read, cfg.thresholds) };
+  }
+
+  _render() {
+    if (!this._config || !this._hass) return;
+    if (!this._built) this._build();
+    const m = this._model();
+    this._lastModel = m;
+    const e = this._els;
+
+    if (m.error) {
+      e.error.textContent = m.error;
+      e.error.style.display = "";
+      e.verdict.classList.add("hidden");
+      e.grid.style.display = "none";
+      e.empty.style.display = "none";
+      return;
+    }
+    e.error.style.display = "none";
+
+    if (e.title) {
+      const name = this._config.title === undefined ? this._areaName || "" : this._config.title;
+      e.title.textContent = name;
+      e.header.style.display = name ? "" : "none";
+    }
+
+    if (!m.metrics.length) {
+      e.verdict.classList.add("hidden");
+      e.grid.style.display = "none";
+      e.empty.style.display = "";
+      e.empty.textContent = this._config.entities
+        ? "None of the configured sensors are available."
+        : `No air sensors found in ${this._areaName || "this room"}.`;
+      return;
+    }
+    e.empty.style.display = "none";
+    e.grid.style.display = "";
+
+    this._renderVerdict(m);
+    this._renderGrid(m);
+    this._refreshHistory();
+  }
+
+  _renderVerdict(m) {
+    const e = this._els;
+    const show = this._config.show_verdict && !!m.verdict.band;
+    e.verdict.classList.toggle("hidden", !show);
+    if (!show) return;
+
+    const band = m.verdict.band;
+    e.verdict.style.setProperty("--band", `var(--wc-${band})`);
+    e.verdictWord.textContent =
+      band === "good" ? "Air is good" : band === "fair" ? "Air is fair" : "Air is poor";
+
+    const d = m.verdict.driver;
+    if (band === "good") {
+      e.verdictWhy.textContent = "Everything measured is within range.";
+    } else if (d) {
+      e.verdictWhy.textContent =
+        `${d.label} is the highest at ${this._format(d)}${d.unit ? " " + d.unit : ""}.`;
+    } else {
+      e.verdictWhy.textContent = "";
+    }
+  }
+
+  _format(metric) {
+    if (metric.value === null) return "—";
+    const p = airPrecision(this._hass, metric.id, metric.value);
+    return metric.value.toFixed(p);
+  }
+
+  _renderGrid(m) {
+    const e = this._els;
+    const key = JSON.stringify(m.metrics.map((x) => x.id));
+    if (key !== this._gridKey) {
+      this._gridKey = key;
+      e.grid.innerHTML = "";
+      e.tiles = m.metrics.map((metric) => {
+        const tile = document.createElement("div");
+        tile.className = "metric";
+        const head = document.createElement("div");
+        head.className = "metric-head";
+        head.appendChild(this._makeIcon(metric.icon));
+        const label = document.createElement("div");
+        label.className = "metric-label";
+        label.textContent = metric.label;
+        head.appendChild(label);
+        const value = document.createElement("div");
+        value.className = "metric-value";
+        // SVG elements need their namespace: document.createElement("svg")
+        // yields an unknown HTML element that renders nothing.
+        const SVG_NS = "http://www.w3.org/2000/svg";
+        const spark = document.createElementNS(SVG_NS, "svg");
+        spark.setAttribute("viewBox", "0 0 100 22");
+        spark.setAttribute("preserveAspectRatio", "none");
+        spark.setAttribute("class", "spark hidden");
+        const path = document.createElementNS(SVG_NS, "path");
+        spark.appendChild(path);
+        tile.append(head, value, spark);
+        e.grid.appendChild(tile);
+        return { metric, tile, value, spark, path };
+      });
+    }
+
+    e.tiles.forEach((t, i) => {
+      const metric = m.metrics[i];
+      t.metric = metric;
+      t.tile.classList.toggle("judged", !!metric.band);
+      t.tile.style.setProperty("--band", metric.band ? `var(--wc-${metric.band})` : "");
+      t.value.textContent = "";
+      const num = document.createElement("span");
+      num.textContent = this._format(metric);
+      t.value.appendChild(num);
+      if (metric.unit) {
+        const unit = document.createElement("span");
+        unit.className = "unit";
+        unit.textContent = metric.unit;
+        t.value.appendChild(unit);
+      }
+    });
+
+    this._renderSparklines();
+  }
+
+  _renderSparklines() {
+    const e = this._els;
+    if (!e.tiles) return;
+    const on = this._config.show_sparklines && !!this._history;
+    e.tiles.forEach((t) => {
+      const series = on ? this._history[t.metric.id] : null;
+      const values = Array.isArray(series)
+        ? series.map((p) => Number(p.s !== undefined ? p.s : p.state)).filter((v) => Number.isFinite(v))
+        : [];
+      const d = sparklinePath(values, 100, 22);
+      // classList works on SVG; assigning .className does not.
+      t.spark.classList.toggle("hidden", !d);
+      if (d) t.path.setAttribute("d", d);
+    });
+  }
+
+  /** History drives the sparklines; without it they simply do not appear. */
+  _refreshHistory() {
+    const cfg = this._config;
+    const m = this._lastModel;
+    if (!cfg.show_sparklines || !m || !m.metrics || !m.metrics.length) return;
+    if (!this._hass.callWS) return;
+    if (this._historyAt && Date.now() - this._historyAt < 290000) return;
+    this._historyAt = Date.now();
+
+    const end = new Date();
+    const start = new Date(end.getTime() - cfg.hours * 3600000);
+    this._hass
+      .callWS({
+        type: "history/history_during_period",
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        entity_ids: m.metrics.map((x) => x.id),
+        minimal_response: true,
+        no_attributes: true,
+      })
+      .then((res) => {
+        this._history = res || {};
+        this._renderSparklines();
+      })
+      .catch(() => {
+        this._history = null;
+        this._renderSparklines();
+      });
+  }
+
+  _makeIcon(icon) {
+    if (customElements.get("ha-icon")) {
+      const el = document.createElement("ha-icon");
+      el.setAttribute("icon", icon);
+      el.className = "icon";
+      el._haIcon = true;
+      return el;
+    }
+    const span = document.createElement("span");
+    span.className = "icon";
+    span._icon = icon;
+    return span;
+  }
+
+  _build() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = AIR_STYLES;
+    root.appendChild(style);
+
+    const card = document.createElement("ha-card");
+    root.appendChild(card);
+
+    this._els = {};
+    if (this._config.show_header) {
+      const header = document.createElement("div");
+      header.className = "header";
+      const title = document.createElement("div");
+      title.className = "title";
+      header.appendChild(title);
+      card.appendChild(header);
+      this._els.header = header;
+      this._els.title = title;
+    }
+
+    const body = document.createElement("div");
+    body.className = this._config.show_header ? "body tight" : "body";
+    card.appendChild(body);
+
+    const error = document.createElement("div");
+    error.className = "error";
+    error.style.display = "none";
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.style.display = "none";
+    body.append(error, empty);
+
+    const verdict = document.createElement("div");
+    verdict.className = "verdict";
+    const dot = document.createElement("div");
+    dot.className = "dot";
+    const vmain = document.createElement("div");
+    vmain.className = "verdict-main";
+    const verdictWord = document.createElement("div");
+    verdictWord.className = "verdict-word";
+    const verdictWhy = document.createElement("div");
+    verdictWhy.className = "verdict-why";
+    vmain.append(verdictWord, verdictWhy);
+    verdict.append(dot, vmain);
+    body.appendChild(verdict);
+
+    const grid = document.createElement("div");
+    grid.className = "grid";
+    body.appendChild(grid);
+
+    Object.assign(this._els, { error, empty, verdict, verdictWord, verdictWhy, grid, tiles: null });
+    this._built = true;
+  }
+}
+
+/* -------------------------------------------------- wabit-air-card-editor */
+
+const AIR_LABELS = {
+  area: "Room",
+  entities: "Specific sensors (leave empty to use the room)",
+  title: "Card title (defaults to the room name)",
+  hours: "Hours of history behind each sparkline",
+  show_verdict: "Show the overall verdict",
+  show_sparklines: "Show sparklines",
+  show_header: "Show the header",
+};
+
+const AIR_SCHEMA = [
+  { name: "area", selector: { area: {} } },
+  { name: "entities", selector: { entity: { domain: "sensor", multiple: true } } },
+  { name: "title", selector: { text: {} } },
+  { name: "hours", selector: { number: { min: 1, max: 168, mode: "box" } } },
+  { name: "show_verdict", selector: { boolean: {} } },
+  { name: "show_sparklines", selector: { boolean: {} } },
+  { name: "show_header", selector: { boolean: {} } },
+];
+
+class WabitAirCardEditor extends HTMLElement {
+  setConfig(config) {
+    this._config = { ...(config || {}) };
+    if (!this._built) this._build();
+    this._push();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._push();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  _build() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = EDITOR_STYLES;
+    root.appendChild(style);
+
+    if (!customElements.get("ha-form")) {
+      const note = document.createElement("div");
+      note.className = "note";
+      note.textContent =
+        "This Home Assistant build does not provide ha-form, so the visual editor " +
+        "is unavailable. Configure this card in YAML instead - the options are " +
+        "documented at " + REPO;
+      root.appendChild(note);
+      this._form = null;
+      this._built = true;
+      return;
+    }
+
+    const form = document.createElement("ha-form");
+    form.schema = AIR_SCHEMA;
+    form.computeLabel = (s) => AIR_LABELS[s.name] || s.name;
+    form.addEventListener("value-changed", (ev) => {
+      ev.stopPropagation();
+      this._config = { ...this._config, ...ev.detail.value };
+      fireEvent(this, "config-changed", { config: this._config });
+    });
+    root.appendChild(form);
+    this._form = form;
+    this._built = true;
+  }
+
+  _push() {
+    if (!this._form || !this._hass || !this._config) return;
+    this._form.hass = this._hass;
+    const data = {
+      area: this._config.area,
+      entities: this._config.entities,
+      title: this._config.title,
+      hours: this._config.hours === undefined ? 12 : this._config.hours,
+      show_verdict: this._config.show_verdict !== false,
+      show_sparklines: this._config.show_sparklines !== false,
+      show_header: this._config.show_header !== false,
+    };
+    if (JSON.stringify(this._form.data) !== JSON.stringify(data)) this._form.data = data;
+  }
+}
+
+if (!customElements.get("wabit-air-card")) {
+  customElements.define("wabit-air-card", WabitAirCard);
+}
+if (!customElements.get("wabit-air-card-editor")) {
+  customElements.define("wabit-air-card-editor", WabitAirCardEditor);
+}
+
+if (!window.customCards.some((c) => c.type === "wabit-air-card")) {
+  window.customCards.push({
+    type: "wabit-air-card",
+    name: "Wabit Air",
+    description:
+      "Air quality for a room: one verdict, every reading, and the trend behind " +
+      "each - in place of a stack of graphs.",
     preview: true,
     documentationURL: REPO,
   });

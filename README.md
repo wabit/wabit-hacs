@@ -8,6 +8,7 @@ each time.
 
 | Card | What it does |
 | --- | --- |
+| `wabit-air-card` | Air quality in a room: one plain-English verdict, every reading from the room's sensors as a grid, and how each has moved over the last few hours. |
 | `wabit-f1-card` | The next Grand Prix: where, when, the circuit layout, the session times and the weather at the track. |
 | `wabit-media-card` | What is playing in a room, across speakers, TVs and streamers, with the active one brought to the front. |
 | `wabit-bin-collection-card` | Upcoming bin collections, grouped by day so bins that go out together read as one collection. |
@@ -35,6 +36,73 @@ type: module
 ```
 
 Then add the card from the dashboard card picker ("Wabit Wakeup"), or paste YAML.
+
+## `wabit-air-card`
+
+![The air card, light and dark](https://raw.githubusercontent.com/wabit/wabit-hacs-dashboard/main/docs/preview-air.png)
+
+```yaml
+type: custom:wabit-air-card
+area: office
+```
+
+Point it at a room and it finds the air sensors there the same way the lights card finds
+lights - through the area, whether that is set on the entity or inherited from its device.
+It leads with a verdict, because a wall of numbers does not answer "is the air alright?",
+and puts the readings underneath with a sparkline each so you can see which way they are
+going.
+
+One device typically produces eight to ten sensors. This replaces the row of graph cards
+they would otherwise need.
+
+### Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | string | **required** | `custom:wabit-air-card` |
+| `area` | string | **required*** | Area id, name or alias. *Not required if `entities` is given. |
+| `entities` | list | - | Specific sensors, skipping discovery entirely. |
+| `metrics` | list | all that are found | Which readings to show, in this order. See below. |
+| `title` | string | the room name | Card header. |
+| `show_header` | boolean | `true` | The header. |
+| `show_verdict` | boolean | `true` | The verdict line. |
+| `show_sparklines` | boolean | `true` | The trend under each reading. |
+| `hours` | number | `12` | How far back the sparklines reach. Clamped to 1-168. |
+| `thresholds` | map | see below | Override where a reading stops being good. |
+
+### Readings
+
+`co2`, `pm25`, `pm10`, `pm1`, `pm4`, `voc`, `nox`, `temperature`, `humidity`, `pressure`.
+
+Sensors are matched on `device_class` first. Where that is not enough they are matched on
+the name too: VOC and NOx indexes are both `aqi`, and PM1 must not swallow PM10.
+
+### The verdict
+
+Only the readings with a health meaning are judged. Temperature, humidity and pressure are
+shown but never colour the verdict - they are comfort, not air quality. The worst reading
+sets the verdict and is named as the reason.
+
+| Reading | Good below | Poor above | Where the numbers come from |
+| --- | --- | --- | --- |
+| `co2` | 800 ppm | 1200 ppm | Building ventilation guidance; concentration starts to suffer past about 1000. |
+| `pm25` | 12 ug/m3 | 35 ug/m3 | WHO interim targets. |
+| `pm10` | 45 ug/m3 | 100 ug/m3 | WHO interim targets. |
+| `pm1` | 12 ug/m3 | 35 ug/m3 | No guideline exists, so the PM2.5 limits are applied. |
+| `voc` | 150 | 250 | Sensirion's VOC index, where 100 is the running average. |
+| `nox` | 150 | 250 | Sensirion's NOx index, the same scale. |
+
+Override any of them:
+
+```yaml
+type: custom:wabit-air-card
+area: bedroom
+thresholds:
+  co2: [700, 1000]
+```
+
+The band colours are deliberately green, amber and red rather than theme colours - a
+judgement that reads as "fine" or "not fine" should not change meaning with the theme.
 
 ## `wabit-f1-card`
 
@@ -568,6 +636,7 @@ node test/room-card.test.mjs       # room lights card
 node test/bin-card.test.mjs        # bin collection card
 node test/media-card.test.mjs      # media card
 node test/f1-card.test.mjs         # f1 card
+node test/air-card.test.mjs        # air card
 ```
 
 Both suites share `test/dom-stub.mjs`, which stubs just enough of the DOM to load the

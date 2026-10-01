@@ -75,7 +75,12 @@ globalThis.HTMLElement = class {
   addEventListener(t, fn) { (this._handlers[t] = this._handlers[t] || []).push(fn); }
   dispatchEvent(ev) { (this._handlers[ev.type] || []).forEach((fn) => fn(ev)); return true; }
 };
-globalThis.document = { createElement: mkEl };
+globalThis.document = {
+  createElement: mkEl,
+  // Namespaced elements behave the same here, but the call has to exist or a
+  // card using SVG would fail in tests while working in a browser.
+  createElementNS: (_ns, tag) => mkEl(tag),
+};
 globalThis.customElements = { _d: {}, get(n) { return this._d[n]; }, define(n, c) { this._d[n] = c; } };
 globalThis.window = { customCards: [], setInterval: () => 0, clearInterval: () => {} };
 globalThis.Event = class { constructor(t) { this.type = t; } };
@@ -103,6 +108,10 @@ const EXPORTS = [
   // f1 card
   "findF1RaceSensor", "findF1WeatherEntity", "f1MapUrl", "minutesTo",
   "f1Countdown", "F1_CIRCUIT_SLUGS", "WabitF1Card", "WabitF1CardEditor",
+  // air card
+  "airSensorsInArea", "matchAirMetrics", "airBand", "airVerdict",
+  "sparklinePath", "airPrecision", "AIR_THRESHOLDS",
+  "WabitAirCard", "WabitAirCardEditor",
 ];
 
 export { mkEl, mkShadow };

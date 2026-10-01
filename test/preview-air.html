@@ -1,0 +1,193 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Wabit air preview</title>
+<style>
+  body {
+    margin: 0; padding: 24px; display: flex; gap: 24px; align-items: flex-start;
+    font-family: Roboto, -apple-system, "Segoe UI", sans-serif;
+    background: #f2eef6;
+  }
+  .pane { width: 440px; }
+  .pane.dark { background: #141218; padding: 16px; border-radius: 20px; }
+  .pane.light { background: #fef7ff; padding: 16px; border-radius: 20px; }
+  .caption { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+             font-weight: 700; margin-bottom: 10px; }
+  .pane.light .caption { color: #6750a4; }
+  .pane.dark .caption { color: #d0bcff; }
+
+  /* Material You token sets, the same names the real themes expose. */
+  .pane.light {
+    --md-sys-color-primary: #6750a4;
+    --md-sys-color-on-surface: #1d1b20;
+    --md-sys-color-on-surface-variant: #49454f;
+    --md-sys-color-surface-container-highest: #e6e0e9;
+    --md-sys-color-primary-container: #eaddff;
+    --md-sys-color-on-primary-container: #21005d;
+    --md-sys-color-outline-variant: #cac4d0;
+    --card-background-color: #fffbfe;
+    --primary-text-color: #1d1b20;
+    --secondary-text-color: #49454f;
+    --primary-color: #6750a4;
+    --rgb-primary-color: 103, 80, 164;
+    --divider-color: #cac4d0;
+  }
+  .pane.dark {
+    --md-sys-color-primary: #d0bcff;
+    --md-sys-color-on-surface: #e6e0e9;
+    --md-sys-color-on-surface-variant: #cac4d0;
+    --md-sys-color-surface-container-highest: #36343b;
+    --md-sys-color-primary-container: #4f378b;
+    --md-sys-color-on-primary-container: #eaddff;
+    --md-sys-color-outline-variant: #49454f;
+    --card-background-color: #211f26;
+    --primary-text-color: #e6e0e9;
+    --secondary-text-color: #cac4d0;
+    --primary-color: #d0bcff;
+    --rgb-primary-color: 208, 188, 255;
+    --divider-color: #49454f;
+  }
+</style>
+</head>
+<body>
+<script>
+/* Stand-ins for the Home Assistant frontend elements the card uses. */
+customElements.define("ha-card", class extends HTMLElement {
+  connectedCallback() {
+    if (this._done) return; this._done = true;
+    const header = this.getAttribute("header");
+    const sr = this.attachShadow({ mode: "open" });
+    sr.innerHTML =
+      '<style>:host{display:block;background:var(--card-background-color);' +
+      'border-radius:var(--ha-card-border-radius,16px);' +
+      'box-shadow:var(--ha-card-box-shadow,0 1px 3px rgba(0,0,0,.18));}' +
+      '.h{font-size:1.3rem;font-weight:400;padding:14px 16px 0;' +
+      'color:var(--md-sys-color-on-surface,var(--primary-text-color));}</style>' +
+      (header ? '<div class="h">' + header + '</div>' : '') + '<slot></slot>';
+  }
+});
+
+
+const ICONS = {
+  "mdi:molecule-co2":
+    "M5,7A2,2 0 0,0 3,9V15A2,2 0 0,0 5,17H8V15H5V9H8V7H5M11,7A2,2 0 0,0 9,9V15A2,2 0 0,0 11,17H13A2,2 0 0,0 15,15V9A2,2 0 0,0 13,7H11M11,9H13V15H11V9M16,10.5V12H19V13.5H17.5A1.5,1.5 0 0,0 16,15V18H20.5V16.5H17.5V15H19A1.5,1.5 0 0,0 20.5,13.5V12A1.5,1.5 0 0,0 19,10.5H16Z",
+  "mdi:blur":
+    "M14,8.5A1.5,1.5 0 0,0 12.5,10A1.5,1.5 0 0,0 14,11.5A1.5,1.5 0 0,0 15.5,10A1.5,1.5 0 0,0 14,8.5M14,12.5A1.5,1.5 0 0,0 12.5,14A1.5,1.5 0 0,0 14,15.5A1.5,1.5 0 0,0 15.5,14A1.5,1.5 0 0,0 14,12.5M10,17A1,1 0 0,0 9,18A1,1 0 0,0 10,19A1,1 0 0,0 11,18A1,1 0 0,0 10,17M10,8.5A1.5,1.5 0 0,0 8.5,10A1.5,1.5 0 0,0 10,11.5A1.5,1.5 0 0,0 11.5,10A1.5,1.5 0 0,0 10,8.5M14,20.5A0.5,0.5 0 0,0 13.5,21A0.5,0.5 0 0,0 14,21.5A0.5,0.5 0 0,0 14.5,21A0.5,0.5 0 0,0 14,20.5M14,17A1,1 0 0,0 13,18A1,1 0 0,0 14,19A1,1 0 0,0 15,18A1,1 0 0,0 14,17M21,13.5A0.5,0.5 0 0,0 20.5,14A0.5,0.5 0 0,0 21,14.5A0.5,0.5 0 0,0 21.5,14A0.5,0.5 0 0,0 21,13.5M18,5A1,1 0 0,0 17,6A1,1 0 0,0 18,7A1,1 0 0,0 19,6A1,1 0 0,0 18,5M18,9A1,1 0 0,0 17,10A1,1 0 0,0 18,11A1,1 0 0,0 19,10A1,1 0 0,0 18,9M18,17A1,1 0 0,0 17,18A1,1 0 0,0 18,19A1,1 0 0,0 19,18A1,1 0 0,0 18,17M18,13A1,1 0 0,0 17,14A1,1 0 0,0 18,15A1,1 0 0,0 19,14A1,1 0 0,0 18,13M10,12.5A1.5,1.5 0 0,0 8.5,14A1.5,1.5 0 0,0 10,15.5A1.5,1.5 0 0,0 11.5,14A1.5,1.5 0 0,0 10,12.5M10,7A1,1 0 0,0 11,6A1,1 0 0,0 10,5A1,1 0 0,0 9,6A1,1 0 0,0 10,7M10,3.5A0.5,0.5 0 0,0 10.5,3A0.5,0.5 0 0,0 10,2.5A0.5,0.5 0 0,0 9.5,3A0.5,0.5 0 0,0 10,3.5M10,20.5A0.5,0.5 0 0,0 9.5,21A0.5,0.5 0 0,0 10,21.5A0.5,0.5 0 0,0 10.5,21A0.5,0.5 0 0,0 10,20.5M3,13.5A0.5,0.5 0 0,0 2.5,14A0.5,0.5 0 0,0 3,14.5A0.5,0.5 0 0,0 3.5,14A0.5,0.5 0 0,0 3,13.5M14,3.5A0.5,0.5 0 0,0 14.5,3A0.5,0.5 0 0,0 14,2.5A0.5,0.5 0 0,0 13.5,3A0.5,0.5 0 0,0 14,3.5M14,7A1,1 0 0,0 15,6A1,1 0 0,0 14,5A1,1 0 0,0 13,6A1,1 0 0,0 14,7M21,10.5A0.5,0.5 0 0,0 21.5,10A0.5,0.5 0 0,0 21,9.5A0.5,0.5 0 0,0 20.5,10A0.5,0.5 0 0,0 21,10.5M6,5A1,1 0 0,0 5,6A1,1 0 0,0 6,7A1,1 0 0,0 7,6A1,1 0 0,0 6,5M3,9.5A0.5,0.5 0 0,0 2.5,10A0.5,0.5 0 0,0 3,10.5A0.5,0.5 0 0,0 3.5,10A0.5,0.5 0 0,0 3,9.5M6,9A1,1 0 0,0 5,10A1,1 0 0,0 6,11A1,1 0 0,0 7,10A1,1 0 0,0 6,9M6,17A1,1 0 0,0 5,18A1,1 0 0,0 6,19A1,1 0 0,0 7,18A1,1 0 0,0 6,17M6,13A1,1 0 0,0 5,14A1,1 0 0,0 6,15A1,1 0 0,0 7,14A1,1 0 0,0 6,13Z",
+  "mdi:air-filter":
+    "M19,18.31V20A2,2 0 0,1 17,22H7A2,2 0 0,1 5,20V16.3C4.54,16.12 3.95,16 3,16A1,1 0 0,1 2,15A1,1 0 0,1 3,14C3.82,14 4.47,14.08 5,14.21V12.3C4.54,12.12 3.95,12 3,12A1,1 0 0,1 2,11A1,1 0 0,1 3,10C3.82,10 4.47,10.08 5,10.21V8.3C4.54,8.12 3.95,8 3,8A1,1 0 0,1 2,7A1,1 0 0,1 3,6C3.82,6 4.47,6.08 5,6.21V4A2,2 0 0,1 7,2H17A2,2 0 0,1 19,4V6.16C20.78,6.47 21.54,7.13 21.71,7.29C22.1,7.68 22.1,8.32 21.71,8.71C21.32,9.1 20.8,9.09 20.29,8.71V8.71C20.29,8.71 19.25,8 17,8C15.74,8 14.91,8.41 13.95,8.9C12.91,9.41 11.74,10 10,10C9.64,10 9.31,10 9,9.96V7.95C9.3,8 9.63,8 10,8C11.26,8 12.09,7.59 13.05,7.11C14.09,6.59 15.27,6 17,6V4H7V20H17V18C18.5,18 18.97,18.29 19,18.31M17,10C15.27,10 14.09,10.59 13.05,11.11C12.09,11.59 11.26,12 10,12C9.63,12 9.3,12 9,11.95V13.96C9.31,14 9.64,14 10,14C11.74,14 12.91,13.41 13.95,12.9C14.91,12.42 15.74,12 17,12C19.25,12 20.29,12.71 20.29,12.71V12.71C20.8,13.1 21.32,13.1 21.71,12.71C22.1,12.32 22.1,11.69 21.71,11.29C21.5,11.08 20.25,10 17,10M17,14C15.27,14 14.09,14.59 13.05,15.11C12.09,15.59 11.26,16 10,16C9.63,16 9.3,16 9,15.95V17.96C9.31,18 9.64,18 10,18C11.74,18 12.91,17.41 13.95,16.9C14.91,16.42 15.74,16 17,16C19.25,16 20.29,16.71 20.29,16.71V16.71C20.8,17.1 21.32,17.1 21.71,16.71C22.1,16.32 22.1,15.69 21.71,15.29C21.5,15.08 20.25,14 17,14Z",
+  "mdi:thermometer":
+    "M15 13V5A3 3 0 0 0 9 5V13A5 5 0 1 0 15 13M12 4A1 1 0 0 1 13 5V8H11V5A1 1 0 0 1 12 4Z",
+  "mdi:water-percent":
+    "M12,3.25C12,3.25 6,10 6,14C6,17.32 8.69,20 12,20A6,6 0 0,0 18,14C18,10 12,3.25 12,3.25M14.47,9.97L15.53,11.03L9.53,17.03L8.47,15.97M9.75,10A1.25,1.25 0 0,1 11,11.25A1.25,1.25 0 0,1 9.75,12.5A1.25,1.25 0 0,1 8.5,11.25A1.25,1.25 0 0,1 9.75,10M14.25,14.5A1.25,1.25 0 0,1 15.5,15.75A1.25,1.25 0 0,1 14.25,17A1.25,1.25 0 0,1 13,15.75A1.25,1.25 0 0,1 14.25,14.5Z",
+  "mdi:gauge":
+    "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12C20,14.4 19,16.5 17.3,18C15.9,16.7 14,16 12,16C10,16 8.2,16.7 6.7,18C5,16.5 4,14.4 4,12A8,8 0 0,1 12,4M14,5.89C13.62,5.9 13.26,6.15 13.1,6.54L11.81,9.77L11.71,10C11,10.13 10.41,10.6 10.14,11.26C9.73,12.29 10.23,13.45 11.26,13.86C12.29,14.27 13.45,13.77 13.86,12.74C14.12,12.08 14,11.32 13.57,10.76L13.67,10.5L14.96,7.29L14.97,7.26C15.17,6.75 14.92,6.17 14.41,5.96C14.28,5.91 14.15,5.89 14,5.89M10,6A1,1 0 0,0 9,7A1,1 0 0,0 10,8A1,1 0 0,0 11,7A1,1 0 0,0 10,6M7,9A1,1 0 0,0 6,10A1,1 0 0,0 7,11A1,1 0 0,0 8,10A1,1 0 0,0 7,9M17,9A1,1 0 0,0 16,10A1,1 0 0,0 17,11A1,1 0 0,0 18,10A1,1 0 0,0 17,9Z",
+};
+customElements.define("ha-icon", class extends HTMLElement {
+  static get observedAttributes() { return ["icon"]; }
+  connectedCallback() { this._paint(); }
+  attributeChangedCallback() { this._paint(); }
+  _paint() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const d = ICONS[this.getAttribute("icon")] || "";
+    this.shadowRoot.innerHTML =
+      '<style>:host{display:inline-flex;width:var(--mdc-icon-size,24px);' +
+      'height:var(--mdc-icon-size,24px);}svg{width:100%;height:100%;fill:currentColor;}</style>' +
+      '<svg viewBox="0 0 24 24"><path d="' + d + '"></path></svg>';
+  }
+});
+</script>
+
+<script src="../dist/wabit-cards.js"></script>
+
+<script>
+/* A plausible twelve hours of readings, so the sparklines have a real shape. */
+function series(end, swing, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    out.push({ s: String(end - swing * (1 - t) + swing * 0.4 * Math.sin(t * 6.2)) });
+  }
+  return out;
+}
+
+const READINGS = {
+  co2: ["carbon_dioxide", "ppm", 0],
+  pm2_5: ["pm25", "µg/m³", 2],
+  pm10: ["pm10", "µg/m³", 2],
+  pm1_0: ["pm1", "µg/m³", 2],
+  pm4_0: ["pm25", "µg/m³", 2],
+  voc_index: ["aqi", "", 0],
+  nox_index: ["aqi", "", 0],
+  air_temperature: ["temperature", "°C", 1],
+  air_humidity: ["humidity", "%", 1],
+  air_pressure: ["atmospheric_pressure", "hPa", 1],
+};
+
+const NAMES = {
+  co2: "CO2", pm2_5: "PM 2.5", pm10: "PM 10", pm1_0: "PM 1.0", pm4_0: "PM 4.0",
+  voc_index: "VOC index", nox_index: "NOx index",
+  air_temperature: "Air temperature", air_humidity: "Air humidity",
+  air_pressure: "Air pressure",
+};
+
+/* How far each reading drifted over the window, so the lines differ. */
+const HISTORY_SHAPE = {
+  co2: -180, pm2_5: 1.4, pm10: 1.9, pm1_0: 0.8, pm4_0: 1.7,
+  voc_index: 11, nox_index: -1.4,
+  air_temperature: 1.6, air_humidity: -5, air_pressure: 2.2,
+};
+
+function makeHass(values, dark) {
+  const entities = {};
+  const states = {};
+  const history = {};
+  for (const [key, [dc, unit, precision]] of Object.entries(READINGS)) {
+    const id = "sensor.air_puck_v1_0_" + key;
+    entities[id] = { entity_id: id, device_id: "d_puck", display_precision: precision };
+    states[id] = {
+      state: String(values[key]),
+      attributes: {
+        device_class: dc, unit_of_measurement: unit, state_class: "measurement",
+        friendly_name: "Office - Environment Sensor " + NAMES[key],
+      },
+    };
+    history[id] = series(values[key], HISTORY_SHAPE[key], 36);
+  }
+  return {
+    themes: { darkMode: dark },
+    locale: { language: "en-GB" },
+    areas: { office: { area_id: "office", name: "Office", aliases: [] } },
+    devices: { d_puck: { area_id: "office" } },
+    entities,
+    states,
+    callService: () => {},
+    callWS: () => Promise.resolve(history),
+  };
+}
+
+const GOOD = {
+  co2: 413, pm2_5: 1.89727973937988, pm10: 2.73941874504089,
+  pm1_0: 1.15892851352692, pm4_0: 2.45424818992615,
+  voc_index: 18, nox_index: 2,
+  air_temperature: 27.8625946044922, air_humidity: 42.1805152893066,
+  air_pressure: 1007.26422119141,
+};
+const STUFFY = { ...GOOD, co2: 1643, voc_index: 182, pm2_5: 9.4 };
+
+function mount(paneClass, caption, dark, values, config) {
+  const pane = document.createElement("div");
+  pane.className = "pane " + paneClass;
+  const cap = document.createElement("div");
+  cap.className = "caption";
+  cap.textContent = caption;
+  pane.appendChild(cap);
+  const card = document.createElement("wabit-air-card");
+  pane.appendChild(card);
+  document.body.appendChild(pane);
+  card.setConfig(config || { area: "office" });
+  card.hass = makeHass(values, dark);
+}
+
+mount("light", "Fresh", false, GOOD);
+mount("dark", "Fresh", true, GOOD);
+mount("light", "Needs a window open", false, STUFFY);
+</script>
+</body></html>
