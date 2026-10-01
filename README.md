@@ -8,7 +8,7 @@ each time.
 | --- | --- |
 | `wabit-wakeup-card` | Control a sunrise-style wake-up light: set the time per schedule, toggle each schedule on or off, choose which light wakes you, and drag a shared fade length — with a live sunrise ramp while it runs. Set-once options tuck behind a settings button. |
 
-![The wakeup card in light and dark Material You themes](https://raw.githubusercontent.com/wabit/wabit-hacs/main/docs/preview.png)
+![The wakeup card in light and dark Material You themes](https://raw.githubusercontent.com/wabit/wabit-hacs-dashboard/main/docs/preview.png)
 
 Every colour comes from a theme token (`--md-sys-color-*` first, then the standard Home
 Assistant variables), so the cards inherit whatever theme the dashboard uses — including
@@ -17,14 +17,14 @@ Material You — instead of imposing their own palette.
 ## Install
 
 1. In Home Assistant go to **HACS → ⋮ (top right) → Custom repositories**.
-2. Add `https://github.com/wabit/wabit-hacs` with category **Dashboard**.
+2. Add `https://github.com/wabit/wabit-hacs-dashboard` with category **Dashboard**.
 3. Find **Wabit Cards** in the HACS list and click **Download**.
 4. Reload your browser (a hard refresh, or restart Home Assistant).
 
 HACS registers the dashboard resource for you. If you need to add it by hand it is:
 
 ```yaml
-url: /hacsfiles/wabit-hacs/wabit-cards.js
+url: /hacsfiles/wabit-hacs-dashboard/wabit-cards.js
 type: module
 ```
 

@@ -1,6 +1,6 @@
 /**
  * Wabit Cards - a small suite of Home Assistant dashboard cards.
- * https://github.com/wabit/wabit-hacs
+ * https://github.com/wabit/wabit-hacs-dashboard
  *
  * Zero dependencies and no build step: this file is the shipped artifact, so
  * what you read here is exactly what the browser loads.
@@ -10,8 +10,8 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.2.0";
-const REPO = "https://github.com/wabit/wabit-hacs";
+const VERSION = "1.2.1";
+const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
   `%c WABIT-CARDS %c v${VERSION} `,
