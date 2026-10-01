@@ -353,4 +353,68 @@ eq("missing pin styled", missRow.children[0].classList.contains("missing"), true
 delete customElements._d["ha-form"];
 
 
+
+/* ------------------------------- editor stability across hass updates ---
+   `hass` is replaced on every state change in the house. Rebuilding the add
+   picker each time tore it down under the user's cursor: the dropdown
+   flickered and would not stay open. Nothing here may be recreated. */
+customElements.define("ha-form", class {});
+const stable = new T.WabitRoomLightsCardEditor();
+stable.setConfig({ area: "living_room", pinned: ["light.lr_ceiling", "light.lr_accent"] });
+stable.hass = hass;
+
+const pickerBefore = stable._els.picker;
+const rowsBefore = stable._els.rows.map((r) => r.row);
+const optionsBefore = stable._els.picker.children.length;
+
+// Simulate a busy house: many hass objects in quick succession.
+for (let i = 0; i < 25; i++) {
+  stable.hass = { ...hass, states: { ...hass.states } };
+}
+eq("add picker survives hass updates", stable._els.picker === pickerBefore, true);
+eq("add picker is not re-appended", stable._els.add.children.length, 1);
+eq("add options are not rebuilt", stable._els.picker.children.length, optionsBefore);
+eq("pin rows survive hass updates",
+   stable._els.rows.map((r) => r.row).every((r, i) => r === rowsBefore[i]), true);
+eq("pin rows are not duplicated", stable._els.list.children.length, 2);
+
+// Changing the pinned list must still rebuild the rows.
+stable._move(0, 1);
+eq("reorder still rebuilds the rows", stable._els.rows[0].id, "light.lr_accent");
+eq("still two rows after reorder", stable._els.list.children.length, 2);
+
+// A light being renamed updates the text in place, without new elements.
+const renamedRow = stable._els.rows[0].row;
+stable.hass = { ...hass, states: { ...hass.states,
+  "light.lr_accent": { ...hass.states["light.lr_accent"],
+    attributes: { ...hass.states["light.lr_accent"].attributes,
+                  friendly_name: "Living Room Mood" } } } };
+eq("rename updates the label", stable._els.rows[0].name.textContent, "Living Room Mood");
+eq("rename does not rebuild the row", stable._els.rows[0].row === renamedRow, true);
+
+// Pinning a light must drop it from the candidate list.
+const beforeAdd = stable._els.picker.children.length;
+stable._addPin("light.lr_spot_1");
+eq("adding a pin shrinks the candidates",
+   stable._els.picker.children.length, beforeAdd - 1);
+eq("add control still the same element", stable._els.picker === pickerBefore, true);
+
+// Same guarantee when Home Assistant provides its own entity picker.
+customElements.define("ha-entity-picker", class {});
+const withPicker = new T.WabitRoomLightsCardEditor();
+withPicker.setConfig({ area: "living_room", pinned: ["light.lr_ceiling"] });
+withPicker.hass = hass;
+eq("uses the HA picker", withPicker._els.add_kind, "picker");
+const haPicker = withPicker._els.picker;
+const includeBefore = haPicker.includeEntities;
+for (let i = 0; i < 10; i++) {
+  withPicker.hass = { ...hass, states: { ...hass.states } };
+}
+eq("HA picker survives hass updates", withPicker._els.picker === haPicker, true);
+eq("HA picker candidate list untouched", withPicker._els.picker.includeEntities, includeBefore);
+eq("HA picker still gets fresh hass", !!withPicker._els.picker.hass, true);
+delete customElements._d["ha-entity-picker"];
+delete customElements._d["ha-form"];
+
+
 done("room-lights");

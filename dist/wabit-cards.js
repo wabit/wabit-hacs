@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.7.0";
+const VERSION = "1.7.1";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -2097,12 +2097,18 @@ class WabitRoomLightsCardEditor extends HTMLElement {
     this._config = { ...(config || {}) };
     if (!this._built) this._build();
     this._renderPins();
+    this._syncAdd();
     this._push();
   }
 
   set hass(hass) {
     this._hass = hass;
+    // Deliberately does NOT rebuild the pin list or the add picker. `hass` is
+    // replaced on every state change in the house, and tearing down the picker
+    // mid-interaction is what made its dropdown flicker and refuse to stay open.
     this._renderPins();
+    this._refreshPinLabels();
+    this._syncAdd();
     this._push();
   }
 
@@ -2125,6 +2131,7 @@ class WabitRoomLightsCardEditor extends HTMLElement {
     this._config = next;
     this._emit();
     this._renderPins();
+    this._syncAdd();
   }
 
   _move(index, delta) {
@@ -2198,7 +2205,9 @@ class WabitRoomLightsCardEditor extends HTMLElement {
         ev.stopPropagation();
         this._config = { ...this._config, ...ev.detail.value };
         this._emit();
-        this._renderPins(); // the area may have changed, so the picker must follow
+        // The area may have changed, so the rows and candidates must follow.
+        this._renderPins();
+        this._syncAdd();
       });
       return f;
     };
@@ -2227,16 +2236,22 @@ class WabitRoomLightsCardEditor extends HTMLElement {
     root.appendChild(bottom);
 
     this._forms = { top, bottom };
-    this._els = { list, add };
+    this._els = { list, add, rows: [] };
     this._built = true;
   }
 
-  _renderPins() {
+  /** Rebuilds the rows only when the pinned list or the area has changed. */
+  _renderPins(force) {
     if (!this._built || !this._els || !this._hass) return;
-    const { list, add } = this._els;
-    list.innerHTML = "";
-
     const pins = this._pins();
+    const key = JSON.stringify([this._config.area, pins]);
+    if (!force && key === this._pinsKey) return;
+    this._pinsKey = key;
+
+    const list = this._els.list;
+    list.innerHTML = "";
+    this._els.rows = [];
+
     if (!pins.length) {
       const empty = document.createElement("div");
       empty.className = "empty-pins";
@@ -2252,11 +2267,6 @@ class WabitRoomLightsCardEditor extends HTMLElement {
 
       const name = document.createElement("span");
       name.className = "pin-name";
-      name.textContent = this._labelFor(id);
-      if (!this._hass.states[id]) {
-        name.className = "pin-name missing";
-        name.textContent = `${id} (not found)`;
-      }
 
       const mkBtn = (glyph, label, disabled, fn, danger) => {
         const b = document.createElement("button");
@@ -2264,7 +2274,6 @@ class WabitRoomLightsCardEditor extends HTMLElement {
         b.className = danger ? "pin-btn danger" : "pin-btn";
         b.textContent = glyph;
         b.title = label;
-        b.setAttribute("aria-label", `${label}: ${this._labelFor(id)}`);
         b.disabled = !!disabled;
         b.addEventListener("click", fn);
         return b;
@@ -2272,56 +2281,95 @@ class WabitRoomLightsCardEditor extends HTMLElement {
 
       row.append(
         name,
-        mkBtn("↑", "Move up", i === 0, () => this._move(i, -1)),
-        mkBtn("↓", "Move down", i === pins.length - 1, () => this._move(i, 1)),
-        mkBtn("✕", "Remove", false, () => this._removePin(i), true)
+        mkBtn("\u2191", "Move up", i === 0, () => this._move(i, -1)),
+        mkBtn("\u2193", "Move down", i === pins.length - 1, () => this._move(i, 1)),
+        mkBtn("\u2715", "Remove", false, () => this._removePin(i), true)
       );
       list.appendChild(row);
+      this._els.rows.push({ id, name, row });
     });
 
-    // The "add" control is rebuilt alongside, since the candidate list depends
-    // on the chosen area and on what is already pinned.
-    add.innerHTML = "";
+    this._refreshPinLabels();
+  }
+
+  /** Names can change under us; updating the text costs nothing and rebuilds nothing. */
+  _refreshPinLabels() {
+    if (!this._els || !this._els.rows || !this._hass) return;
+    this._els.rows.forEach(({ id, name, row }) => {
+      const known = !!this._hass.states[id];
+      const label = known ? this._labelFor(id) : `${id} (not found)`;
+      if (name.textContent !== label) name.textContent = label;
+      name.className = known ? "pin-name" : "pin-name missing";
+      [...row.children].forEach((c) => {
+        if (c.title) c.setAttribute("aria-label", `${c.title}: ${label}`);
+      });
+    });
+  }
+
+  /**
+   * Creates the add control once, then only touches it when the candidates
+   * change. Recreating it on every hass update is what broke the dropdown.
+   */
+  _syncAdd() {
+    if (!this._built || !this._els || !this._hass) return;
+    const { add } = this._els;
+    const pins = this._pins();
     const candidates = this._areaLights()
       .filter((id) => !pins.includes(id))
       .sort((a, b) => this._labelFor(a).localeCompare(this._labelFor(b)));
+    const key = JSON.stringify(candidates);
 
-    if (customElements.get("ha-entity-picker")) {
-      const picker = document.createElement("ha-entity-picker");
-      picker.hass = this._hass;
-      picker.includeDomains = ["light"];
-      if (candidates.length) picker.includeEntities = candidates;
-      picker.label = "Add a light";
-      picker.allowCustomEntity = false;
-      picker.value = "";
-      picker.addEventListener("value-changed", (ev) => {
-        ev.stopPropagation();
-        const v = ev.detail && ev.detail.value;
+    if (!this._els.add_kind) {
+      if (customElements.get("ha-entity-picker")) {
+        const picker = document.createElement("ha-entity-picker");
+        picker.includeDomains = ["light"];
+        picker.label = "Add a light";
+        picker.allowCustomEntity = false;
         picker.value = "";
-        this._addPin(v);
-      });
-      add.appendChild(picker);
-    } else {
-      const sel = document.createElement("select");
-      sel.className = "add-pin";
+        picker.addEventListener("value-changed", (ev) => {
+          ev.stopPropagation();
+          const v = ev.detail && ev.detail.value;
+          picker.value = "";
+          this._addPin(v);
+        });
+        add.appendChild(picker);
+        this._els.picker = picker;
+        this._els.add_kind = "picker";
+      } else {
+        const sel = document.createElement("select");
+        sel.className = "add-pin";
+        sel.addEventListener("change", () => {
+          const v = sel.value;
+          sel.value = "";
+          this._addPin(v);
+        });
+        add.appendChild(sel);
+        this._els.picker = sel;
+        this._els.add_kind = "select";
+      }
+    }
+
+    const el = this._els.picker;
+    if (this._els.add_kind === "picker") {
+      el.hass = this._hass;
+      if (key !== this._addKey) {
+        el.includeEntities = candidates.length ? candidates : undefined;
+      }
+    } else if (key !== this._addKey) {
+      el.innerHTML = "";
       const blank = document.createElement("option");
       blank.value = "";
-      blank.textContent = candidates.length ? "Add a light…" : "No more lights in this room";
-      sel.appendChild(blank);
+      blank.textContent = candidates.length ? "Add a light\u2026" : "No more lights in this room";
+      el.appendChild(blank);
       candidates.forEach((id) => {
         const o = document.createElement("option");
         o.value = id;
         o.textContent = this._labelFor(id);
-        sel.appendChild(o);
+        el.appendChild(o);
       });
-      sel.disabled = !candidates.length;
-      sel.addEventListener("change", () => {
-        const v = sel.value;
-        sel.value = "";
-        this._addPin(v);
-      });
-      add.appendChild(sel);
+      el.disabled = !candidates.length;
     }
+    this._addKey = key;
   }
 
   _push() {
@@ -2629,6 +2677,7 @@ class WabitBinCollectionCard extends HTMLElement {
 
     this._built = false;
     this._rowsKey = null;
+    this._chipsKey = null;
     if (this.shadowRoot) this.shadowRoot.innerHTML = "";
     if (this._hass) this._render();
   }
@@ -2848,6 +2897,12 @@ class WabitBinCollectionCard extends HTMLElement {
     h.heroWhen.textContent = this._when(g);
     // Today and tomorrow earn a solid chip; anything further out stays tonal.
     h.hero.classList.toggle("soon", g.days !== null && g.days <= 1);
+
+    // Same reasoning as the rows: only rebuild when the bins themselves change,
+    // not on every hass update.
+    const chipKey = JSON.stringify(g.bins.map((b) => [b.key, b.label, b.color, b.icon]));
+    if (chipKey === this._chipsKey) return;
+    this._chipsKey = chipKey;
 
     h.chips.innerHTML = "";
     g.bins.forEach((b) => {
