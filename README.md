@@ -56,13 +56,26 @@ button, so a room with twenty spots still reads as a short card.
 | `type` | string | **required** | `custom:wabit-room-lights-card` |
 | `area` | string | **required** | Area id, name or alias — `living_room`, `Living Room` and `lounge` all work. |
 | `title` | string | the room name | Card header. |
-| `pinned` | list | – | Lights that are always visible, in this order. Everything else goes behind "Show more". Omit it and every light shows. |
+| `pinned` | list | – | Lights that are always visible, **in this order**. Everything else goes behind the expander. Omit it and every light shows. |
 | `exclude` | list | – | Lights to leave out entirely. |
 | `collapse_groups` | boolean | `false` | When nothing is pinned, treat members of a group light as the hidden ones. See below. |
 | `show_brightness` | boolean | `true` | Per-light brightness sliders. |
 | `show_colour` | boolean | `true` | Per-light colour controls (`show_color` also accepted). |
 | `show_header` | boolean | `true` | Room name, on-count and the room-wide toggle. |
 | `strip_area_name` | boolean | `true` | Trim the room name off each label, so "Living Room - Ceiling All" shows as "Ceiling All". |
+
+### Ordering the pinned lights
+
+`pinned` is an ordered list — the card shows those lights top to bottom exactly as you
+write them, so reordering in YAML is just moving the lines.
+
+In the visual editor the "Always visible" section lists them with ↑ / ↓ / ✕ controls, so
+you can reorder and remove without retyping anything. The picker underneath offers the
+room's other lights, sorted by name, minus whatever is already pinned. Clearing the list
+removes the `pinned` key entirely, which means "show everything" again.
+
+Lights behind the expander are always sorted by name; the ordering control is for the
+ones you actually see.
 
 ### What counts as a light in the room
 
@@ -88,6 +101,9 @@ Brightness and colour adapt to what each bulb reports in `supported_color_modes`
 - a `color_temp` light gets a warm-to-cool white slider over its own kelvin range
 - an `hs`/`xy`/`rgb` light gets hue and saturation sliders
 - a light supporting both gets all three, plus preset swatches
+
+A light that is `unavailable` or `unknown` is shown as such and its controls are disabled,
+rather than being drawn as a plain "Off" with a toggle that would do nothing.
 
 The room-wide button in the header turns everything off if anything is on, otherwise turns
 everything on. It targets exactly the lights the card is showing, not the whole area, so

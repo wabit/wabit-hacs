@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.3.0";
+const VERSION = "1.4.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -1346,6 +1346,9 @@ const ROOM_STYLES = `
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .light.off .name { color: var(--wc-muted); }
+  .light.dead { opacity: 0.55; }
+  .light.dead .pct { font-style: italic; }
+  .light.dead .bulb { cursor: not-allowed; }
   .pct {
     color: var(--wc-muted); font-size: 0.85rem; min-width: 3.1em;
     text-align: right; font-variant-numeric: tabular-nums;
@@ -1403,15 +1406,24 @@ const ROOM_STYLES = `
   .more { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 260ms ease; }
   .more.open { grid-template-rows: 1fr; }
   .more-inner { overflow: hidden; min-height: 0; }
+  /* Deliberately light: a borderless strip, not a full-width pill, so the
+     expander costs a line of text rather than a whole row. */
   .more-btn {
-    width: 100%; margin-top: 8px; padding: 9px 12px; border-radius: 999px;
-    border: 1px solid var(--wc-outline); background: none; cursor: pointer;
-    color: var(--wc-muted); font: inherit; font-size: 0.85rem;
+    width: 100%; margin-top: 2px; padding: 3px 8px; border-radius: 8px;
+    border: none; background: none; cursor: pointer;
+    color: var(--wc-muted); font: inherit; font-size: 0.76rem;
+    letter-spacing: 0.02em;
+    display: flex; align-items: center; justify-content: center; gap: 3px;
     transition: background 160ms, color 160ms;
   }
   .more-btn:hover { background: var(--wc-tonal); color: var(--wc-text); }
   .more-btn:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: 2px; }
   .more-btn.hidden { display: none; }
+  .more-btn .icon {
+    color: inherit; --mdc-icon-size: 15px; transition: transform 200ms ease;
+  }
+  .more-btn.open .icon { transform: rotate(180deg); }
+  @media (prefers-reduced-motion: reduce) { .more-btn .icon { transition: none; } }
 
   .empty { color: var(--wc-muted); font-size: 0.9rem; padding: 8px 0 4px; line-height: 1.5; }
   .error { color: var(--error-color, #db4437); font-size: 0.9rem; padding: 8px 0; line-height: 1.5; }
@@ -1632,8 +1644,12 @@ class WabitRoomLightsCard extends HTMLElement {
     moreBtn.className = "more-btn hidden";
     moreBtn.type = "button";
     moreBtn.setAttribute("aria-expanded", "false");
+    const moreLabel = document.createElement("span");
+    const moreChev = this._makeIcon("mdi:chevron-down");
+    moreBtn.append(moreLabel, moreChev);
     moreBtn.addEventListener("click", () => this._toggleMore());
     body.appendChild(moreBtn);
+    this._els.moreLabel = moreLabel;
 
     this._els.error = error;
     this._els.pinned = pinned;
@@ -1670,7 +1686,7 @@ class WabitRoomLightsCard extends HTMLElement {
       this._moreOpen = false;
       this._els.more.classList.remove("open");
     }
-    this._els.moreBtn.textContent = this._moreOpen ? "Show less" : `Show ${n} more`;
+    this._setMoreLabel(n);
 
     if (!model.pinned.length && !n) {
       const empty = document.createElement("div");
@@ -1837,6 +1853,7 @@ class WabitRoomLightsCard extends HTMLElement {
       const st = hass.states[id];
       if (!row || !st) continue;
 
+      const dead = st.state === "unavailable" || st.state === "unknown";
       const lit = st.state === "on";
       if (lit) on += 1;
       const pct = brightnessPct(st);
@@ -1853,7 +1870,7 @@ class WabitRoomLightsCard extends HTMLElement {
 
       row.swatchBtn.style.background = colour || "";
       const showSwatch =
-        this._config.show_colour && (supportsColour(st) || supportsTemp(st));
+        !dead && this._config.show_colour && (supportsColour(st) || supportsTemp(st));
       row.swatchBtn.style.display = showSwatch ? "" : "none";
 
       const showBri = this._config.show_brightness && dimmable;
@@ -1861,7 +1878,12 @@ class WabitRoomLightsCard extends HTMLElement {
       row.dim.disabled = !lit;
       if (this.shadowRoot.activeElement !== row.dim) row.dim.value = String(pct || 1);
 
-      if (!dimmable) row.pct.textContent = lit ? "On" : "Off";
+      // An unavailable light must not read as a plain "Off" with a live toggle.
+      row.wrap.classList.toggle("dead", dead);
+      row.bulb.disabled = dead;
+      if (dead) row.dim.disabled = true;
+      if (dead) row.pct.textContent = "Unavailable";
+      else if (!dimmable) row.pct.textContent = lit ? "On" : "Off";
       else row.pct.textContent = lit ? `${pct}%` : "Off";
 
       if (row.colourBuilt && row.controls) {
@@ -1895,15 +1917,19 @@ class WabitRoomLightsCard extends HTMLElement {
     }
 
     const n = model.extra.length;
-    if (n) this._els.moreBtn.textContent = this._moreOpen ? "Show less" : `Show ${n} more`;
+    if (n) this._setMoreLabel(n);
+  }
+
+  _setMoreLabel(n) {
+    this._els.moreLabel.textContent = this._moreOpen ? "Show less" : `${n} more`;
+    this._els.moreBtn.classList.toggle("open", this._moreOpen);
   }
 
   _toggleMore() {
     this._moreOpen = !this._moreOpen;
     this._els.more.classList.toggle("open", this._moreOpen);
     this._els.moreBtn.setAttribute("aria-expanded", String(this._moreOpen));
-    const n = this._lastModel ? this._lastModel.extra.length : 0;
-    this._els.moreBtn.textContent = this._moreOpen ? "Show less" : `Show ${n} more`;
+    this._setMoreLabel(this._lastModel ? this._lastModel.extra.length : 0);
   }
 
   _toggleColour(id) {
@@ -1996,10 +2022,12 @@ const ROOM_LABELS = {
   strip_area_name: "Trim the room name off each light's label",
 };
 
-const ROOM_SCHEMA = [
+const ROOM_SCHEMA_TOP = [
   { name: "area", required: true, selector: { area: {} } },
   { name: "title", selector: { text: {} } },
-  { name: "pinned", selector: { entity: { domain: "light", multiple: true } } },
+];
+
+const ROOM_SCHEMA_BOTTOM = [
   { name: "exclude", selector: { entity: { domain: "light", multiple: true } } },
   { name: "collapse_groups", selector: { boolean: {} } },
   { name: "show_brightness", selector: { boolean: {} } },
@@ -2008,20 +2036,136 @@ const ROOM_SCHEMA = [
   { name: "strip_area_name", selector: { boolean: {} } },
 ];
 
+const ROOM_EDITOR_STYLES = `
+  :host { display: block; }
+  .section { margin: 16px 0 8px; }
+  .section-title {
+    font-size: 0.95rem; font-weight: 600; color: var(--primary-text-color);
+    margin-bottom: 2px;
+  }
+  .hint {
+    font-size: 0.78rem; color: var(--secondary-text-color);
+    line-height: 1.45; margin-bottom: 8px;
+  }
+  .pin-list {
+    display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px;
+  }
+  .pin-row {
+    display: flex; align-items: center; gap: 4px;
+    border: 1px solid var(--divider-color); border-radius: 10px;
+    padding: 4px 4px 4px 12px;
+  }
+  .pin-name {
+    flex: 1; min-width: 0; font-size: 0.9rem; color: var(--primary-text-color);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .pin-name.missing { color: var(--error-color, #db4437); }
+  .pin-btn {
+    flex: none; width: 30px; height: 30px; padding: 0; border: none;
+    border-radius: 50%; background: none; cursor: pointer; font: inherit;
+    font-size: 1rem; line-height: 1; color: var(--secondary-text-color);
+    transition: background 140ms, color 140ms;
+  }
+  .pin-btn:hover:not(:disabled) {
+    background: rgba(var(--rgb-primary-color, 63, 81, 181), 0.12);
+    color: var(--primary-text-color);
+  }
+  .pin-btn:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 1px; }
+  .pin-btn:disabled { opacity: 0.3; cursor: default; }
+  .pin-btn.danger:hover:not(:disabled) {
+    background: rgba(219, 68, 55, 0.14); color: var(--error-color, #db4437);
+  }
+  .empty-pins {
+    font-size: 0.85rem; color: var(--secondary-text-color);
+    border: 1px dashed var(--divider-color); border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 8px; line-height: 1.45;
+  }
+  select.add-pin {
+    width: 100%; font: inherit; font-size: 0.9rem; padding: 8px 10px;
+    border-radius: 10px; border: 1px solid var(--divider-color);
+    background: var(--card-background-color); color: var(--primary-text-color);
+  }
+  .note {
+    padding: 12px; border-radius: 12px; line-height: 1.5;
+    background: rgba(var(--rgb-primary-color, 63, 81, 181), 0.08);
+    color: var(--primary-text-color); font-size: 0.9rem;
+  }
+`;
+
 class WabitRoomLightsCardEditor extends HTMLElement {
   setConfig(config) {
     this._config = { ...(config || {}) };
     if (!this._built) this._build();
+    this._renderPins();
     this._push();
   }
 
   set hass(hass) {
     this._hass = hass;
+    this._renderPins();
     this._push();
   }
 
   get hass() {
     return this._hass;
+  }
+
+  _emit() {
+    fireEvent(this, "config-changed", { config: this._config });
+  }
+
+  _pins() {
+    return Array.isArray(this._config.pinned) ? this._config.pinned : [];
+  }
+
+  _setPins(list) {
+    const next = { ...this._config };
+    if (list.length) next.pinned = list;
+    else delete next.pinned; // no `pinned` key means "show everything"
+    this._config = next;
+    this._emit();
+    this._renderPins();
+  }
+
+  _move(index, delta) {
+    const list = this._pins().slice();
+    const to = index + delta;
+    if (to < 0 || to >= list.length) return;
+    [list[index], list[to]] = [list[to], list[index]];
+    this._setPins(list);
+  }
+
+  _removePin(index) {
+    const list = this._pins().slice();
+    list.splice(index, 1);
+    this._setPins(list);
+  }
+
+  _addPin(entityId) {
+    if (!entityId || !String(entityId).startsWith("light.")) return;
+    const list = this._pins();
+    if (list.includes(entityId)) return;
+    this._setPins(list.concat([entityId]));
+  }
+
+  /** Lights in the configured area, for the "add" picker. */
+  _areaLights() {
+    const hass = this._hass;
+    if (!hass || !hass.areas || !this._config.area) return [];
+    const areaId = resolveAreaId(hass, this._config.area);
+    return areaId ? lightsInArea(hass, areaId) : [];
+  }
+
+  _labelFor(id) {
+    const hass = this._hass;
+    if (!hass) return id;
+    const reg = (hass.entities || {})[id];
+    const st = hass.states[id];
+    return (
+      (reg && reg.name) ||
+      (st && st.attributes && st.attributes.friendly_name) ||
+      id
+    );
   }
 
   _build() {
@@ -2030,7 +2174,7 @@ class WabitRoomLightsCardEditor extends HTMLElement {
     root.innerHTML = "";
 
     const style = document.createElement("style");
-    style.textContent = EDITOR_STYLES;
+    style.textContent = ROOM_EDITOR_STYLES;
     root.appendChild(style);
 
     if (!customElements.get("ha-form")) {
@@ -2041,39 +2185,163 @@ class WabitRoomLightsCardEditor extends HTMLElement {
         "is unavailable. Configure this card in YAML instead - the options are " +
         "documented at " + REPO;
       root.appendChild(note);
-      this._form = null;
+      this._forms = null;
       this._built = true;
       return;
     }
 
-    const form = document.createElement("ha-form");
-    form.schema = ROOM_SCHEMA;
-    form.computeLabel = (s) => ROOM_LABELS[s.name] || s.name;
-    form.addEventListener("value-changed", (ev) => {
-      ev.stopPropagation();
-      this._config = { ...this._config, ...ev.detail.value };
-      fireEvent(this, "config-changed", { config: this._config });
-    });
-    root.appendChild(form);
-    this._form = form;
+    const mkForm = (schema) => {
+      const f = document.createElement("ha-form");
+      f.schema = schema;
+      f.computeLabel = (s) => ROOM_LABELS[s.name] || s.name;
+      f.addEventListener("value-changed", (ev) => {
+        ev.stopPropagation();
+        this._config = { ...this._config, ...ev.detail.value };
+        this._emit();
+        this._renderPins(); // the area may have changed, so the picker must follow
+      });
+      return f;
+    };
+
+    const top = mkForm(ROOM_SCHEMA_TOP);
+    root.appendChild(top);
+
+    const section = document.createElement("div");
+    section.className = "section";
+    const title = document.createElement("div");
+    title.className = "section-title";
+    title.textContent = "Always visible";
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    hint.textContent =
+      "These stay on the card, in this order. Everything else in the room moves " +
+      "behind the expander. Leave the list empty to show every light.";
+    const list = document.createElement("div");
+    list.className = "pin-list";
+    const add = document.createElement("div");
+    add.className = "pin-add";
+    section.append(title, hint, list, add);
+    root.appendChild(section);
+
+    const bottom = mkForm(ROOM_SCHEMA_BOTTOM);
+    root.appendChild(bottom);
+
+    this._forms = { top, bottom };
+    this._els = { list, add };
     this._built = true;
   }
 
+  _renderPins() {
+    if (!this._built || !this._els || !this._hass) return;
+    const { list, add } = this._els;
+    list.innerHTML = "";
+
+    const pins = this._pins();
+    if (!pins.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty-pins";
+      empty.textContent =
+        "Nothing pinned, so every light in the room is shown. Add one below to " +
+        "start choosing.";
+      list.appendChild(empty);
+    }
+
+    pins.forEach((id, i) => {
+      const row = document.createElement("div");
+      row.className = "pin-row";
+
+      const name = document.createElement("span");
+      name.className = "pin-name";
+      name.textContent = this._labelFor(id);
+      if (!this._hass.states[id]) {
+        name.className = "pin-name missing";
+        name.textContent = `${id} (not found)`;
+      }
+
+      const mkBtn = (glyph, label, disabled, fn, danger) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = danger ? "pin-btn danger" : "pin-btn";
+        b.textContent = glyph;
+        b.title = label;
+        b.setAttribute("aria-label", `${label}: ${this._labelFor(id)}`);
+        b.disabled = !!disabled;
+        b.addEventListener("click", fn);
+        return b;
+      };
+
+      row.append(
+        name,
+        mkBtn("↑", "Move up", i === 0, () => this._move(i, -1)),
+        mkBtn("↓", "Move down", i === pins.length - 1, () => this._move(i, 1)),
+        mkBtn("✕", "Remove", false, () => this._removePin(i), true)
+      );
+      list.appendChild(row);
+    });
+
+    // The "add" control is rebuilt alongside, since the candidate list depends
+    // on the chosen area and on what is already pinned.
+    add.innerHTML = "";
+    const candidates = this._areaLights()
+      .filter((id) => !pins.includes(id))
+      .sort((a, b) => this._labelFor(a).localeCompare(this._labelFor(b)));
+
+    if (customElements.get("ha-entity-picker")) {
+      const picker = document.createElement("ha-entity-picker");
+      picker.hass = this._hass;
+      picker.includeDomains = ["light"];
+      if (candidates.length) picker.includeEntities = candidates;
+      picker.label = "Add a light";
+      picker.allowCustomEntity = false;
+      picker.value = "";
+      picker.addEventListener("value-changed", (ev) => {
+        ev.stopPropagation();
+        const v = ev.detail && ev.detail.value;
+        picker.value = "";
+        this._addPin(v);
+      });
+      add.appendChild(picker);
+    } else {
+      const sel = document.createElement("select");
+      sel.className = "add-pin";
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = candidates.length ? "Add a light…" : "No more lights in this room";
+      sel.appendChild(blank);
+      candidates.forEach((id) => {
+        const o = document.createElement("option");
+        o.value = id;
+        o.textContent = this._labelFor(id);
+        sel.appendChild(o);
+      });
+      sel.disabled = !candidates.length;
+      sel.addEventListener("change", () => {
+        const v = sel.value;
+        sel.value = "";
+        this._addPin(v);
+      });
+      add.appendChild(sel);
+    }
+  }
+
   _push() {
-    if (!this._form || !this._hass || !this._config) return;
-    this._form.hass = this._hass;
-    const data = {
+    if (!this._forms || !this._hass || !this._config) return;
+    const assign = (form, data) => {
+      form.hass = this._hass;
+      if (JSON.stringify(form.data) !== JSON.stringify(data)) form.data = data;
+    };
+    assign(this._forms.top, {
       area: this._config.area,
       title: this._config.title,
-      pinned: this._config.pinned,
+    });
+    assign(this._forms.bottom, {
       exclude: this._config.exclude,
       collapse_groups: this._config.collapse_groups === true,
       show_brightness: this._config.show_brightness !== false,
       show_colour: this._config.show_colour !== false && this._config.show_color !== false,
       show_header: this._config.show_header !== false,
       strip_area_name: this._config.strip_area_name !== false,
-    };
-    if (JSON.stringify(this._form.data) !== JSON.stringify(data)) this._form.data = data;
+    });
   }
 }
 

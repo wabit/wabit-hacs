@@ -58,9 +58,10 @@ function mkShadow() {
 }
 
 globalThis.HTMLElement = class {
-  constructor() { this.style = {}; this.shadowRoot = null; }
+  constructor() { this.style = {}; this.shadowRoot = null; this._handlers = {}; }
   attachShadow() { this.shadowRoot = mkShadow(); return this.shadowRoot; }
-  dispatchEvent() { return true; }
+  addEventListener(t, fn) { (this._handlers[t] = this._handlers[t] || []).push(fn); }
+  dispatchEvent(ev) { (this._handlers[ev.type] || []).forEach((fn) => fn(ev)); return true; }
 };
 globalThis.document = { createElement: mkEl };
 globalThis.customElements = { _d: {}, get(n) { return this._d[n]; }, define(n, c) { this._d[n] = c; } };

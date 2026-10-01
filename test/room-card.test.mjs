@@ -18,6 +18,7 @@ const hass = {
     living_room: { area_id: "living_room", name: "Living Room", aliases: ["lounge"] },
     bedroom_2: { area_id: "bedroom_2", name: "Bedroom", aliases: [] },
     empty_room: { area_id: "empty_room", name: "Empty Room", aliases: [] },
+    dead_room: { area_id: "dead_room", name: "Dead Room", aliases: [] },
   },
   devices: {
     d_group: { area_id: "living_room" },
@@ -25,6 +26,7 @@ const hass = {
     d_ap: { area_id: "living_room" },
     d_bed: { area_id: "bedroom_2" },
     d_none: { area_id: null },
+    d_dead: { area_id: "dead_room" },
   },
   entities: {
     // area inherited from the device - the normal case
@@ -41,6 +43,7 @@ const hass = {
     "light.orphan": { entity_id: "light.orphan", device_id: "d_none" },
     "switch.lr_fan": { entity_id: "switch.lr_fan", device_id: "d_spot" },
     "light.bed_strip": { entity_id: "light.bed_strip", device_id: "d_bed" },
+    "light.ghost_group": { entity_id: "light.ghost_group", device_id: "d_dead" },
   },
   states: {
     "light.lr_ceiling": st({
@@ -78,6 +81,11 @@ const hass = {
     "light.orphan": st({ state: "on", attributes: {} }),
     "light.bed_strip": st({
       attributes: { friendly_name: "Bedroom Strip", supported_color_modes: ["onoff"] },
+    }),
+    "light.ghost_group": st({
+      state: "unavailable",
+      attributes: { friendly_name: "Dead Room - Ghost Group",
+                    supported_color_modes: ["color_temp", "xy"] },
     }),
   },
   callService: (d, s, data) => calls.push([d, s, data]),
@@ -137,12 +145,13 @@ eq("keeps full name when asked",
 const pinned = mk({ area: "lounge", pinned: ["light.lr_ceiling", "light.lr_accent"] });
 eq("pinned kept in config order", pinned._lastModel.pinned, ["light.lr_ceiling", "light.lr_accent"]);
 eq("rest moved to the expander", pinned._lastModel.extra, ["light.lr_spot_1", "light.lr_spot_2"]);
-eq("expander label", pinned._els.moreBtn.textContent, "Show 2 more");
+eq("expander label", pinned._els.moreLabel.textContent, "2 more");
 eq("expander shown", pinned._els.moreBtn.classList.contains("hidden"), false);
 eq("expander starts closed", pinned._els.more.classList.contains("open"), false);
 pinned._els.moreBtn._fire("click");
 eq("expander opens", pinned._els.more.classList.contains("open"), true);
-eq("expander label flips", pinned._els.moreBtn.textContent, "Show less");
+eq("expander label flips", pinned._els.moreLabel.textContent, "Show less");
+eq("expander chevron flips", pinned._els.moreBtn.classList.contains("open"), true);
 eq("expander aria", pinned._els.moreBtn.getAttribute("aria-expanded"), "true");
 pinned._els.moreBtn._fire("click");
 eq("expander closes", pinned._els.more.classList.contains("open"), false);
@@ -267,5 +276,81 @@ eq("registered", !!customElements.get("wabit-room-lights-card"), true);
 eq("editor registered", !!customElements.get("wabit-room-lights-card-editor"), true);
 eq("listed in the picker",
    window.customCards.some((c) => c.type === "wabit-room-lights-card"), true);
+
+
+/* ------------------------------------------------- unavailable lights */
+const deadCard = mk({ area: "dead_room" });
+const deadRow = deadCard._els.rows.get("light.ghost_group");
+eq("unavailable reads as such", deadRow.pct.textContent, "Unavailable");
+eq("unavailable row flagged", deadRow.wrap.classList.contains("dead"), true);
+eq("unavailable toggle disabled", deadRow.bulb.disabled, true);
+eq("unavailable slider disabled", deadRow.dim.disabled, true);
+eq("unavailable hides colour button", deadRow.swatchBtn.style.display, "none");
+eq("unavailable counts as not-on", deadCard._els.header.summary.textContent, "All off - 1 light");
+
+/* --------------------------------------------------- editor reordering */
+customElements.define("ha-form", class {});
+const edCfg = { area: "living_room",
+                pinned: ["light.lr_ceiling", "light.lr_accent", "light.lr_spot_1"] };
+const ed = new T.WabitRoomLightsCardEditor();
+const emitted = [];
+ed.addEventListener("config-changed", (ev) => emitted.push(ev.detail.config));
+ed.setConfig(edCfg);
+ed.hass = hass;
+
+const rows = () => ed._els.list.children.filter((c) => c.classList.contains("pin-row"));
+eq("one row per pinned light", rows().length, 3);
+eq("row shows the friendly name", rows()[0].children[0].textContent, "Living Room - Ceiling All");
+eq("first row cannot move up", rows()[0].children[1].disabled, true);
+eq("first row can move down", rows()[0].children[2].disabled, false);
+eq("last row cannot move down", rows()[2].children[2].disabled, true);
+
+rows()[0].children[2]._fire("click");           // move Ceiling down
+eq("move down reorders", emitted.at(-1).pinned,
+   ["light.lr_accent", "light.lr_ceiling", "light.lr_spot_1"]);
+eq("list re-rendered in new order", rows()[0].children[0].textContent, "Living Room Accent");
+
+rows()[2].children[1]._fire("click");           // move Spot 1 up
+eq("move up reorders", emitted.at(-1).pinned,
+   ["light.lr_accent", "light.lr_spot_1", "light.lr_ceiling"]);
+
+rows()[1].children[3]._fire("click");           // remove Spot 1
+eq("remove drops the entry", emitted.at(-1).pinned,
+   ["light.lr_accent", "light.lr_ceiling"]);
+
+// Emptying the list must drop the key entirely, which means "show everything".
+rows()[0].children[3]._fire("click");
+rows()[0].children[3]._fire("click");
+eq("empty list removes the key", "pinned" in emitted.at(-1), false);
+eq("empty state explained", ed._els.list.children[0].classList.contains("empty-pins"), true);
+
+// The add picker offers the room's other lights, minus whatever is already pinned.
+const sel = ed._els.add.children[0];
+eq("add control is a select here", sel.tagName, "select");
+// Sorted by label: "Living Room - Ceiling All" collates before "Living Room Accent".
+eq("offers every area light when none pinned",
+   sel.children.slice(1).map((o) => o.value),
+   ["light.lr_ceiling", "light.lr_accent", "light.lr_spot_1", "light.lr_spot_2"]);
+sel.value = "light.lr_spot_2";
+sel._fire("change");
+eq("adding pins it", emitted.at(-1).pinned, ["light.lr_spot_2"]);
+eq("added light leaves the candidate list",
+   ed._els.add.children[0].children.slice(1).map((o) => o.value),
+   ["light.lr_ceiling", "light.lr_accent", "light.lr_spot_1"]);
+eq("adding a duplicate is ignored", (() => {
+  const before = emitted.length;
+  ed._addPin("light.lr_spot_2");
+  return emitted.length === before;
+})(), true);
+
+// A pinned entity that has since disappeared is called out rather than hidden.
+const ed2 = new T.WabitRoomLightsCardEditor();
+ed2.setConfig({ area: "living_room", pinned: ["light.vanished"] });
+ed2.hass = hass;
+const missRow = ed2._els.list.children.filter((c) => c.classList.contains("pin-row"))[0];
+eq("missing pin flagged", missRow.children[0].textContent, "light.vanished (not found)");
+eq("missing pin styled", missRow.children[0].classList.contains("missing"), true);
+delete customElements._d["ha-form"];
+
 
 done("room-lights");
