@@ -23,6 +23,7 @@ jobs:
       - run: node test/room-card.test.mjs
       - run: node test/bin-card.test.mjs
       - run: node test/media-card.test.mjs
+      - run: node test/f1-card.test.mjs
 
       - name: Publish release with the card attached
         env:

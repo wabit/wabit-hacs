@@ -6,6 +6,7 @@ each time.
 
 | Card | What it does |
 | --- | --- |
+| `wabit-f1-card` | The next Grand Prix: where, when, the circuit layout, the session times and the weather at the track. |
 | `wabit-media-card` | What is playing in a room, across speakers, TVs and streamers, with the active one brought to the front. |
 | `wabit-bin-collection-card` | Upcoming bin collections, grouped by day so bins that go out together read as one collection. |
 | `wabit-room-lights-card` | Every light in a room, found automatically from its area: pin the ones you use, tuck the rest behind "Show more", with brightness and colour per light. |
@@ -32,6 +33,64 @@ type: module
 ```
 
 Then add the card from the dashboard card picker ("Wabit Wakeup"), or paste YAML.
+
+## `wabit-f1-card`
+
+![The F1 card, light and dark](https://raw.githubusercontent.com/wabit/wabit-hacs-dashboard/main/docs/preview-f1.png)
+
+```yaml
+type: custom:wabit-f1-card
+```
+
+Built for the [F1 Sensor](https://github.com/Nicxe/f1_sensor) integration. With nothing
+configured it finds the next-race sensor and the circuit weather entity on its own, and
+shows the round, the race, the circuit and where it is, every session time with the next
+one picked out, a countdown, and the conditions at the track.
+
+### Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | string | **required** | `custom:wabit-f1-card` |
+| `entity` | entity | found automatically | The next-race sensor. |
+| `weather_entity` | entity | found automatically | A weather entity at the circuit. |
+| `map_url` | string | – | Where to find the circuit map. See below. |
+| `title` | string | – | Card header. The race name is the heading, so usually leave it out. |
+| `show_map` | boolean | `true` | The circuit layout. |
+| `show_weather` | boolean | `true` | Conditions at the track. |
+| `show_sessions` | boolean | `true` | Practice, qualifying and race times. |
+
+Discovery looks for a sensor carrying `race_name`, `circuit_id` and `race_start_utc`, and
+for a weather entity carrying `circuit_id` — so the household weather is never mistaken
+for the track's.
+
+### The circuit map
+
+The integration has `circuit_map_url` and `circuit_outline_url` attributes and the card
+uses them when they are filled in. They are often empty, so `map_url` says where else to
+look. It is a template: `{circuit_id}`, `{circuit_f1}`, `{season}` and `{round}` are
+substituted.
+
+Images of your own, which is the option that will not break:
+
+```yaml
+map_url: /local/circuits/{circuit_id}.png
+```
+
+Drop a file per circuit into `config/www/circuits/` named after its id — `sepang.png`,
+`silverstone.png` — and each race picks up its own.
+
+Formula 1's own artwork, which other cards use:
+
+```yaml
+map_url: https://media.formula1.com/image/upload/f_auto,c_limit,q_auto,w_1320/content/dam/fom-website/2018-redesign-assets/Circuit%20maps%2016x9/{circuit_f1}_Circuit
+```
+
+`{circuit_f1}` translates the circuit id into the name Formula 1 files that artwork under
+— `sepang` becomes `Malaysia`. This is hotlinking someone else's CDN: it works today, it
+is not promised to keep working, and it is not the default for that reason.
+
+With neither, the card says so in place of the map rather than showing a broken image.
 
 ## `wabit-media-card`
 
@@ -505,6 +564,7 @@ node test/card.test.mjs            # wakeup card
 node test/room-card.test.mjs       # room lights card
 node test/bin-card.test.mjs        # bin collection card
 node test/media-card.test.mjs      # media card
+node test/f1-card.test.mjs         # f1 card
 ```
 
 Both suites share `test/dom-stub.mjs`, which stubs just enough of the DOM to load the

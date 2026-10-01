@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.13.2";
+const VERSION = "1.14.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -4501,6 +4501,679 @@ if (!window.customCards.some((c) => c.type === "wabit-media-card")) {
     description:
       "What is playing in a room, across speakers, TVs and streamers, with the " +
       "active one brought to the front.",
+    preview: true,
+    documentationURL: REPO,
+  });
+}
+
+/* ---------------------------------------------------------- wabit-f1-card */
+
+/** Session attribute prefixes on the next-race sensor, in running order. */
+const F1_SESSIONS = [
+  ["first_practice", "Practice 1"],
+  ["second_practice", "Practice 2"],
+  ["third_practice", "Practice 3"],
+  ["sprint_qualifying", "Sprint Qualifying"],
+  ["sprint", "Sprint"],
+  ["qualifying", "Qualifying"],
+  ["race", "Race"],
+];
+
+/**
+ * Formula 1's own circuit artwork is named by country rather than by the
+ * circuit ids the data uses, so a lookup is needed to build those URLs. Only
+ * consulted when the `map_url` template asks for {circuit_f1}.
+ */
+const F1_CIRCUIT_SLUGS = {
+  albert_park: "Australia", bahrain: "Bahrain", shanghai: "China",
+  suzuka: "Japan", jeddah: "Saudi_Arabia", miami: "Miami",
+  imola: "Emilia_Romagna", monaco: "Monaco", catalunya: "Spain",
+  villeneuve: "Canada", red_bull_ring: "Austria", silverstone: "Great_Britain",
+  hungaroring: "Hungary", spa: "Belgium", zandvoort: "Netherlands",
+  monza: "Italy", baku: "Baku", marina_bay: "Singapore",
+  americas: "USA", rodriguez: "Mexico", interlagos: "Brazil",
+  vegas: "Las_Vegas", losail: "Qatar", yas_marina: "Abu_Dhabi",
+  sepang: "Malaysia", istanbul: "Turkey", portimao: "Portugal",
+  ricard: "France", mugello: "Mugello", nurburgring: "Nurburgring",
+  hockenheimring: "Germany", sochi: "Russia", algarve: "Portugal",
+};
+
+/** A sensor that looks like the F1 next-race sensor. */
+function findF1RaceSensor(hass) {
+  const states = (hass && hass.states) || {};
+  return (
+    Object.keys(states)
+      .filter((id) => id.startsWith("sensor."))
+      .find((id) => {
+        const a = states[id].attributes || {};
+        return !!a.race_name && !!a.circuit_id && !!a.race_start_utc;
+      }) || null
+  );
+}
+
+/** A weather entity the F1 integration has pinned to the circuit. */
+function findF1WeatherEntity(hass) {
+  const states = (hass && hass.states) || {};
+  return (
+    Object.keys(states)
+      .filter((id) => id.startsWith("weather."))
+      .find((id) => !!(states[id].attributes || {}).circuit_id) || null
+  );
+}
+
+/** Fills {circuit_id}, {circuit_f1}, {season}, {round} in a URL template. */
+function f1MapUrl(template, attrs) {
+  if (!template) return null;
+  const slug = F1_CIRCUIT_SLUGS[attrs.circuit_id] || attrs.circuit_id || "";
+  return String(template)
+    .replace(/\{circuit_id\}/g, attrs.circuit_id || "")
+    .replace(/\{circuit_f1\}/g, slug)
+    .replace(/\{season\}/g, attrs.season || "")
+    .replace(/\{round\}/g, attrs.round || "");
+}
+
+/** Whole minutes until `date`, or null. */
+function minutesTo(date, now) {
+  if (!date || Number.isNaN(date.getTime())) return null;
+  return Math.round((date.getTime() - now.getTime()) / 60000);
+}
+
+/** "in 3 days", "in 4h 20m", "Under way", "Finished". */
+function f1Countdown(mins) {
+  if (mins === null) return "";
+  if (mins < -240) return "Finished";
+  if (mins < 0) return "Under way";
+  if (mins < 60) return `in ${mins}m`;
+  if (mins < 1440) {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return m ? `in ${h}h ${m}m` : `in ${h}h`;
+  }
+  const d = Math.floor(mins / 1440);
+  const h = Math.floor((mins % 1440) / 60);
+  return h ? `in ${d}d ${h}h` : `in ${d}d`;
+}
+
+function f1DateTime(date, locale) {
+  try {
+    return date.toLocaleString(locale || undefined, {
+      weekday: "short", day: "numeric", month: "short",
+      hour: "2-digit", minute: "2-digit",
+    });
+  } catch (e) {
+    return date.toString();
+  }
+}
+
+function f1Time(date, locale) {
+  try {
+    return date.toLocaleTimeString(locale || undefined, {
+      hour: "2-digit", minute: "2-digit",
+    });
+  } catch (e) {
+    return "";
+  }
+}
+
+function f1Day(date, locale) {
+  try {
+    return date.toLocaleDateString(locale || undefined, {
+      weekday: "short", day: "numeric", month: "short",
+    });
+  } catch (e) {
+    return "";
+  }
+}
+
+const WEATHER_ICONS = {
+  "clear-night": "mdi:weather-night", cloudy: "mdi:weather-cloudy",
+  fog: "mdi:weather-fog", hail: "mdi:weather-hail",
+  lightning: "mdi:weather-lightning", "lightning-rainy": "mdi:weather-lightning-rainy",
+  partlycloudy: "mdi:weather-partly-cloudy", pouring: "mdi:weather-pouring",
+  rainy: "mdi:weather-rainy", snowy: "mdi:weather-snowy",
+  "snowy-rainy": "mdi:weather-snowy-rainy", sunny: "mdi:weather-sunny",
+  windy: "mdi:weather-windy", "windy-variant": "mdi:weather-windy-variant",
+  exceptional: "mdi:alert-circle-outline",
+};
+
+const F1_STYLES = `
+  :host {
+    display: block;
+    --wc-text: var(--md-sys-color-on-surface, var(--primary-text-color, #212121));
+    --wc-muted: var(--md-sys-color-on-surface-variant, var(--secondary-text-color, #727272));
+    --wc-accent: var(--md-sys-color-primary, var(--primary-color, #3f51b5));
+    --wc-tonal: var(--md-sys-color-surface-container-highest,
+                 rgba(var(--rgb-primary-text-color, 33, 33, 33), 0.08));
+    --wc-outline: var(--md-sys-color-outline-variant, var(--divider-color, #e0e0e0));
+    --wc-accent-tonal: var(--md-sys-color-primary-container,
+                        rgba(var(--rgb-primary-color, 63, 81, 181), 0.16));
+    --wc-on-accent-tonal: var(--md-sys-color-on-primary-container, var(--wc-accent));
+  }
+  ha-card { overflow: hidden; }
+  .body { padding: 16px; }
+
+  .eyebrow {
+    font-size: 0.7rem; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--wc-muted); font-weight: 600;
+  }
+  .race {
+    color: var(--wc-text); font-size: 1.5rem; font-weight: 500; line-height: 1.22;
+    letter-spacing: -0.01em; margin-top: 3px;
+  }
+  .circuit { color: var(--wc-text); font-size: 0.95rem; margin-top: 6px; }
+  .place { color: var(--wc-muted); font-size: 0.82rem; margin-top: 1px; }
+
+  /* ------------------------------------------------------------- the map */
+  .map {
+    margin: 14px 0 2px; border-radius: 14px; background: var(--wc-tonal);
+    min-height: 150px; display: flex; align-items: center; justify-content: center;
+    padding: 10px; box-sizing: border-box;
+  }
+  .map.hidden { display: none; }
+  .map img { max-width: 100%; max-height: 230px; display: block; }
+  .map-fallback {
+    text-align: center; color: var(--wc-muted); font-size: 0.8rem;
+    line-height: 1.5; padding: 16px 12px;
+  }
+  .map-fallback .icon { --mdc-icon-size: 30px; display: block; margin: 0 auto 6px; }
+
+  /* ----------------------------------------------------------- the strip */
+  .strip { display: flex; gap: 10px; margin-top: 14px; }
+  .panel {
+    flex: 1 1 0; min-width: 0; border-radius: 14px; padding: 12px;
+    background: var(--wc-tonal);
+  }
+  .panel.hidden { display: none; }
+  .panel-label {
+    font-size: 0.66rem; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--wc-muted); font-weight: 600;
+  }
+  .panel-main {
+    display: flex; align-items: center; gap: 8px; margin-top: 5px;
+    color: var(--wc-text); font-size: 1.12rem; line-height: 1.2;
+  }
+  .panel-main .icon { --mdc-icon-size: 26px; color: var(--wc-accent); flex: none; }
+  .panel-sub {
+    color: var(--wc-muted); font-size: 0.78rem; margin-top: 4px; line-height: 1.4;
+  }
+  .countdown {
+    display: inline-block; margin-top: 7px; padding: 3px 9px; border-radius: 999px;
+    font-size: 0.74rem; font-weight: 600;
+    background: var(--wc-accent-tonal); color: var(--wc-on-accent-tonal);
+  }
+
+  /* --------------------------------------------------------- the sessions */
+  .sessions { margin-top: 14px; }
+  .sessions.hidden { display: none; }
+  .session {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 7px 0; border-top: 1px solid var(--wc-outline);
+    font-variant-numeric: tabular-nums;
+  }
+  .session:first-of-type { border-top: none; }
+  .session-name { flex: 1; min-width: 0; color: var(--wc-text); font-size: 0.9rem; }
+  .session-when { color: var(--wc-muted); font-size: 0.82rem; white-space: nowrap; }
+  .session.next .session-name { color: var(--wc-accent); font-weight: 600; }
+  .session.next .session-when { color: var(--wc-accent); }
+  .session.done { opacity: 0.45; }
+
+  .error { color: var(--error-color, #db4437); font-size: 0.9rem; line-height: 1.5; }
+`;
+
+class WabitF1Card extends HTMLElement {
+  static getConfigElement() {
+    return document.createElement("wabit-f1-card-editor");
+  }
+
+  static getStubConfig(hass) {
+    const stub = { type: "custom:wabit-f1-card" };
+    const race = findF1RaceSensor(hass);
+    if (race) stub.entity = race;
+    return stub;
+  }
+
+  setConfig(config) {
+    const cfg = config || {};
+    if (!isUnset(cfg.entity) && !String(cfg.entity).startsWith("sensor.")) {
+      throw new Error("wabit-f1-card: `entity` must be a sensor");
+    }
+    if (!isUnset(cfg.weather_entity) && !String(cfg.weather_entity).startsWith("weather.")) {
+      throw new Error("wabit-f1-card: `weather_entity` must be a weather entity");
+    }
+    this._config = {
+      entity: isUnset(cfg.entity) ? null : cfg.entity,
+      weather_entity: isUnset(cfg.weather_entity) ? null : cfg.weather_entity,
+      map_url: isUnset(cfg.map_url) ? null : String(cfg.map_url),
+      title: cfg.title,
+      show_map: cfg.show_map !== false,
+      show_weather: cfg.show_weather !== false,
+      show_sessions: cfg.show_sessions !== false,
+    };
+    this._built = false;
+    this._sessionsKey = null;
+    if (this.shadowRoot) this.shadowRoot.innerHTML = "";
+    if (this._hass) this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._config) this._render();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  connectedCallback() {
+    // Countdowns go stale on a dashboard left open.
+    this._tick = window.setInterval(() => {
+      if (this._built && this._hass) this._render();
+    }, 30000);
+  }
+
+  disconnectedCallback() {
+    if (this._tick) window.clearInterval(this._tick);
+    this._tick = null;
+  }
+
+  getCardSize() {
+    return 6;
+  }
+
+  _locale() {
+    const l = this._hass && this._hass.locale;
+    return (l && l.language) || undefined;
+  }
+
+  _model() {
+    const hass = this._hass;
+    const cfg = this._config;
+    const id = cfg.entity || findF1RaceSensor(hass);
+    if (!id) {
+      return { error: "No Formula 1 race sensor found. Set `entity` to one." };
+    }
+    const st = hass.states[id];
+    if (!st) return { error: `${id} is not available.` };
+    const a = st.attributes || {};
+
+    const now = new Date();
+    const sessions = F1_SESSIONS.map(([key, label]) => {
+      const raw = a[`${key}_start_utc`] || a[`${key}_start`];
+      if (!raw) return null;
+      const when = new Date(raw);
+      if (Number.isNaN(when.getTime())) return null;
+      return { key, label, when, mins: minutesTo(when, now) };
+    })
+      .filter(Boolean)
+      .sort((x, y) => x.when - y.when);
+
+    // The next session is the first that has not started.
+    const next = sessions.find((s) => s.mins !== null && s.mins >= 0) || null;
+    const race = sessions.find((s) => s.key === "race") || null;
+
+    const weatherId = cfg.weather_entity || findF1WeatherEntity(hass);
+    const weather = weatherId ? hass.states[weatherId] : null;
+
+    return {
+      attrs: a,
+      sessions,
+      next,
+      race,
+      weather,
+      mapUrl:
+        f1MapUrl(cfg.map_url, a) || a.circuit_map_url || a.circuit_outline_url || null,
+    };
+  }
+
+  _render() {
+    if (!this._config || !this._hass) return;
+    if (!this._built) this._build();
+    const m = this._model();
+    this._lastModel = m;
+    const e = this._els;
+
+    if (m.error) {
+      e.error.textContent = m.error;
+      e.error.style.display = "";
+      ["head", "map", "strip", "sessions"].forEach((k) => e[k].classList.add("hidden"));
+      return;
+    }
+    e.error.style.display = "none";
+    e.head.classList.remove("hidden");
+
+    const a = m.attrs;
+    const locale = this._locale();
+
+    e.eyebrow.textContent = a.round
+      ? `Round ${a.round}${a.season ? ` · ${a.season}` : ""}`
+      : "Next race";
+    e.race.textContent = a.race_name || "Next race";
+    e.circuit.textContent = a.circuit_name || "";
+    e.circuit.style.display = a.circuit_name ? "" : "none";
+    const place = [a.circuit_locality, a.circuit_country].filter(Boolean).join(", ");
+    e.place.textContent = place;
+    e.place.style.display = place ? "" : "none";
+
+    this._renderMap(m);
+    this._renderStrip(m, locale);
+    this._renderSessions(m, locale);
+  }
+
+  _renderMap(m) {
+    const e = this._els;
+    if (!this._config.show_map) {
+      e.map.classList.add("hidden");
+      return;
+    }
+    e.map.classList.remove("hidden");
+    const url = m.mapUrl;
+    if (url) {
+      if (e.mapImg._src !== url) {
+        e.mapImg._src = url;
+        e.mapImg.setAttribute("src", url);
+        e.mapImg.setAttribute("alt", `${m.attrs.circuit_name || "Circuit"} layout`);
+      }
+      e.mapImg.style.display = "";
+      e.mapFallback.style.display = "none";
+    } else {
+      e.mapImg.style.display = "none";
+      e.mapFallback.style.display = "";
+      e.mapFallbackText.textContent =
+        "No circuit map configured. Set `map_url` to point at one - the README has recipes.";
+    }
+  }
+
+  _renderStrip(m, locale) {
+    const e = this._els;
+    const target = m.next || m.race;
+
+    if (target) {
+      e.next.classList.remove("hidden");
+      e.nextLabel.textContent = m.next ? "Next session" : "Race";
+      e.nextName.textContent = target.label;
+      e.nextWhen.textContent = f1DateTime(target.when, locale);
+      const text = f1Countdown(target.mins);
+      e.nextCountdown.textContent = text;
+      e.nextCountdown.style.display = text ? "" : "none";
+    } else {
+      e.next.classList.add("hidden");
+    }
+
+    const w = m.weather;
+    const show = this._config.show_weather && !!w && !DEAD_STATES.has(w.state);
+    e.weather.classList.toggle("hidden", !show);
+    if (!show) return;
+
+    const wa = w.attributes || {};
+    this._setIcon(e.weatherIcon, WEATHER_ICONS[w.state] || "mdi:weather-cloudy");
+    const unit = wa.temperature_unit || "°C";
+    e.weatherTemp.textContent =
+      typeof wa.temperature === "number" ? `${Math.round(wa.temperature)}${unit}` : "";
+    const bits = [];
+    // The state is a slug like "partlycloudy"; make it read as words.
+    bits.push(String(w.state).replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase()));
+    if (typeof wa.humidity === "number") bits.push(`${Math.round(wa.humidity)}% humidity`);
+    if (typeof wa.wind_speed === "number") {
+      bits.push(`${Math.round(wa.wind_speed)} ${wa.wind_speed_unit || "km/h"} wind`);
+    }
+    e.weatherSub.textContent = bits.join(" · ");
+  }
+
+  _renderSessions(m, locale) {
+    const e = this._els;
+    if (!this._config.show_sessions || !m.sessions.length) {
+      e.sessions.classList.add("hidden");
+      return;
+    }
+    e.sessions.classList.remove("hidden");
+
+    const key = JSON.stringify(m.sessions.map((s) => [s.key, s.when.getTime()]));
+    if (key !== this._sessionsKey) {
+      this._sessionsKey = key;
+      e.sessions.innerHTML = "";
+      e.sessionRows = m.sessions.map((s) => {
+        const row = document.createElement("div");
+        row.className = "session";
+        const name = document.createElement("div");
+        name.className = "session-name";
+        name.textContent = s.label;
+        const when = document.createElement("div");
+        when.className = "session-when";
+        row.append(name, when);
+        e.sessions.appendChild(row);
+        return { s, row, when };
+      });
+    }
+
+    (e.sessionRows || []).forEach(({ s, row, when }) => {
+      when.textContent = `${f1Day(s.when, locale)} ${f1Time(s.when, locale)}`;
+      row.classList.toggle("next", !!m.next && s.key === m.next.key);
+      row.classList.toggle("done", s.mins !== null && s.mins < 0);
+    });
+  }
+
+  _makeIcon(icon) {
+    if (customElements.get("ha-icon")) {
+      const el = document.createElement("ha-icon");
+      el.setAttribute("icon", icon);
+      el.className = "icon";
+      el._haIcon = true;
+      return el;
+    }
+    const span = document.createElement("span");
+    span.className = "icon";
+    span._icon = icon;
+    return span;
+  }
+
+  _setIcon(el, icon) {
+    if (!el) return;
+    if (el._haIcon) {
+      if (el.getAttribute("icon") !== icon) el.setAttribute("icon", icon);
+    } else {
+      el._icon = icon;
+    }
+  }
+
+  _build() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = F1_STYLES;
+    root.appendChild(style);
+
+    const card = document.createElement("ha-card");
+    if (this._config.title) card.setAttribute("header", this._config.title);
+    root.appendChild(card);
+
+    const body = document.createElement("div");
+    body.className = "body";
+    card.appendChild(body);
+
+    const error = document.createElement("div");
+    error.className = "error";
+    error.style.display = "none";
+    body.appendChild(error);
+
+    const head = document.createElement("div");
+    head.className = "head";
+    const eyebrow = document.createElement("div");
+    eyebrow.className = "eyebrow";
+    const race = document.createElement("div");
+    race.className = "race";
+    const circuit = document.createElement("div");
+    circuit.className = "circuit";
+    const place = document.createElement("div");
+    place.className = "place";
+    head.append(eyebrow, race, circuit, place);
+    body.appendChild(head);
+
+    const map = document.createElement("div");
+    map.className = "map";
+    const mapImg = document.createElement("img");
+    mapImg.setAttribute("loading", "lazy");
+    const mapFallback = document.createElement("div");
+    mapFallback.className = "map-fallback";
+    mapFallback.appendChild(this._makeIcon("mdi:map-marker-path"));
+    const mapFallbackText = document.createElement("span");
+    mapFallback.appendChild(mapFallbackText);
+    map.append(mapImg, mapFallback);
+    body.appendChild(map);
+
+    const strip = document.createElement("div");
+    strip.className = "strip";
+
+    const next = document.createElement("div");
+    next.className = "panel";
+    const nextLabel = document.createElement("div");
+    nextLabel.className = "panel-label";
+    const nextMain = document.createElement("div");
+    nextMain.className = "panel-main";
+    const nextName = document.createElement("span");
+    nextMain.appendChild(nextName);
+    const nextWhen = document.createElement("div");
+    nextWhen.className = "panel-sub";
+    const nextCountdown = document.createElement("div");
+    nextCountdown.className = "countdown";
+    next.append(nextLabel, nextMain, nextWhen, nextCountdown);
+
+    const weather = document.createElement("div");
+    weather.className = "panel";
+    const weatherLabel = document.createElement("div");
+    weatherLabel.className = "panel-label";
+    weatherLabel.textContent = "Track weather";
+    const weatherMain = document.createElement("div");
+    weatherMain.className = "panel-main";
+    const weatherIcon = this._makeIcon("mdi:weather-cloudy");
+    const weatherTemp = document.createElement("span");
+    weatherMain.append(weatherIcon, weatherTemp);
+    const weatherSub = document.createElement("div");
+    weatherSub.className = "panel-sub";
+    weather.append(weatherLabel, weatherMain, weatherSub);
+
+    strip.append(next, weather);
+    body.appendChild(strip);
+
+    const sessions = document.createElement("div");
+    sessions.className = "sessions";
+    body.appendChild(sessions);
+
+    this._els = {
+      error, head, eyebrow, race, circuit, place,
+      map, mapImg, mapFallback, mapFallbackText,
+      strip, next, nextLabel, nextName, nextWhen, nextCountdown,
+      weather, weatherIcon, weatherTemp, weatherSub,
+      sessions, sessionRows: [],
+    };
+    this._built = true;
+  }
+}
+
+/* --------------------------------------------------- wabit-f1-card-editor */
+
+const F1_LABELS = {
+  entity: "Next-race sensor (found automatically if left empty)",
+  weather_entity: "Circuit weather (found automatically if left empty)",
+  map_url: "Circuit map URL - {circuit_id}, {circuit_f1}, {season} and {round} are filled in",
+  title: "Card title (leave empty for none)",
+  show_map: "Show the circuit map",
+  show_weather: "Show track weather",
+  show_sessions: "Show the session times",
+};
+
+const F1_SCHEMA = [
+  { name: "entity", selector: { entity: { domain: "sensor" } } },
+  { name: "weather_entity", selector: { entity: { domain: "weather" } } },
+  { name: "map_url", selector: { text: {} } },
+  { name: "title", selector: { text: {} } },
+  { name: "show_map", selector: { boolean: {} } },
+  { name: "show_weather", selector: { boolean: {} } },
+  { name: "show_sessions", selector: { boolean: {} } },
+];
+
+class WabitF1CardEditor extends HTMLElement {
+  setConfig(config) {
+    this._config = { ...(config || {}) };
+    if (!this._built) this._build();
+    this._push();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._push();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  _build() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = EDITOR_STYLES;
+    root.appendChild(style);
+
+    if (!customElements.get("ha-form")) {
+      const note = document.createElement("div");
+      note.className = "note";
+      note.textContent =
+        "This Home Assistant build does not provide ha-form, so the visual editor " +
+        "is unavailable. Configure this card in YAML instead - the options are " +
+        "documented at " + REPO;
+      root.appendChild(note);
+      this._form = null;
+      this._built = true;
+      return;
+    }
+
+    const form = document.createElement("ha-form");
+    form.schema = F1_SCHEMA;
+    form.computeLabel = (s) => F1_LABELS[s.name] || s.name;
+    form.addEventListener("value-changed", (ev) => {
+      ev.stopPropagation();
+      this._config = { ...this._config, ...ev.detail.value };
+      fireEvent(this, "config-changed", { config: this._config });
+    });
+    root.appendChild(form);
+    this._form = form;
+    this._built = true;
+  }
+
+  _push() {
+    if (!this._form || !this._hass || !this._config) return;
+    this._form.hass = this._hass;
+    const data = {
+      entity: this._config.entity,
+      weather_entity: this._config.weather_entity,
+      map_url: this._config.map_url,
+      title: this._config.title,
+      show_map: this._config.show_map !== false,
+      show_weather: this._config.show_weather !== false,
+      show_sessions: this._config.show_sessions !== false,
+    };
+    if (JSON.stringify(this._form.data) !== JSON.stringify(data)) this._form.data = data;
+  }
+}
+
+if (!customElements.get("wabit-f1-card")) {
+  customElements.define("wabit-f1-card", WabitF1Card);
+}
+if (!customElements.get("wabit-f1-card-editor")) {
+  customElements.define("wabit-f1-card-editor", WabitF1CardEditor);
+}
+
+if (!window.customCards.some((c) => c.type === "wabit-f1-card")) {
+  window.customCards.push({
+    type: "wabit-f1-card",
+    name: "Wabit F1",
+    description:
+      "The next Grand Prix: where, when, the circuit layout, the session times " +
+      "and the weather at the track.",
     preview: true,
     documentationURL: REPO,
   });

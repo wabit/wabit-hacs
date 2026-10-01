@@ -100,6 +100,9 @@ const EXPORTS = [
   "mediaPlayersInArea", "mediaRank", "formatDuration", "mediaPosition",
   "mediaSubtitle", "mediaTitle", "MEDIA_NOISE_PLATFORMS",
   "WabitMediaCard", "WabitMediaCardEditor",
+  // f1 card
+  "findF1RaceSensor", "findF1WeatherEntity", "f1MapUrl", "minutesTo",
+  "f1Countdown", "F1_CIRCUIT_SLUGS", "WabitF1Card", "WabitF1CardEditor",
 ];
 
 export { mkEl, mkShadow };
