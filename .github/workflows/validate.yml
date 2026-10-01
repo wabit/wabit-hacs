@@ -27,3 +27,4 @@ jobs:
           node-version: "22"
       - run: node --check dist/wabit-cards.js
       - run: node test/card.test.mjs
+      - run: node test/room-card.test.mjs

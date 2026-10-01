@@ -6,6 +6,7 @@ each time.
 
 | Card | What it does |
 | --- | --- |
+| `wabit-room-lights-card` | Every light in a room, found automatically from its area: pin the ones you use, tuck the rest behind "Show more", with brightness and colour per light. |
 | `wabit-wakeup-card` | Control a sunrise-style wake-up light: set the time per schedule, toggle each schedule on or off, choose which light wakes you, and drag a shared fade length — with a live sunrise ramp while it runs. Set-once options tuck behind a settings button. |
 
 ![The wakeup card in light and dark Material You themes](https://raw.githubusercontent.com/wabit/wabit-hacs-dashboard/main/docs/preview.png)
@@ -29,6 +30,68 @@ type: module
 ```
 
 Then add the card from the dashboard card picker ("Wabit Wakeup"), or paste YAML.
+
+## `wabit-room-lights-card`
+
+![Room lights card, pinned and expanded](https://raw.githubusercontent.com/wabit/wabit-hacs-dashboard/main/docs/preview-room.png)
+
+Point it at a room and it finds that room's lights itself — no entity list to maintain.
+
+```yaml
+type: custom:wabit-room-lights-card
+area: living_room
+pinned:
+  - light.living_room_ceiling
+  - light.living_room_accent
+```
+
+Each light gets a tap-to-toggle button tinted with its current colour, a brightness
+slider, and a colour control. Anything not in `pinned` moves behind a **Show N more**
+button, so a room with twenty spots still reads as a short card.
+
+### Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | string | **required** | `custom:wabit-room-lights-card` |
+| `area` | string | **required** | Area id, name or alias — `living_room`, `Living Room` and `lounge` all work. |
+| `title` | string | the room name | Card header. |
+| `pinned` | list | – | Lights that are always visible, in this order. Everything else goes behind "Show more". Omit it and every light shows. |
+| `exclude` | list | – | Lights to leave out entirely. |
+| `collapse_groups` | boolean | `false` | When nothing is pinned, treat members of a group light as the hidden ones. See below. |
+| `show_brightness` | boolean | `true` | Per-light brightness sliders. |
+| `show_colour` | boolean | `true` | Per-light colour controls (`show_color` also accepted). |
+| `show_header` | boolean | `true` | Room name, on-count and the room-wide toggle. |
+| `strip_area_name` | boolean | `true` | Trim the room name off each label, so "Living Room - Ceiling All" shows as "Ceiling All". |
+
+### What counts as a light in the room
+
+An entity can be placed in an area directly, but usually inherits it from its device, so
+both are checked. Entities Home Assistant marks as **config or diagnostic** are skipped —
+that is what keeps access-point status LEDs and presence-sensor LEDs, which are `light`
+entities as far as HA is concerned, out of your living room. Hidden and disabled entities
+are skipped too.
+
+### `collapse_groups`
+
+Zigbee2MQTT group lights report their members in a `group_entities` attribute. With
+`collapse_groups: true` and no `pinned` list, any light that is a member of another light
+in the same room moves behind "Show more" — so a ceiling group stays visible while its
+thirteen individual spots tuck away. It never hides everything: if every light turns out
+to be a group member, they all stay visible.
+
+### Controls
+
+Brightness and colour adapt to what each bulb reports in `supported_color_modes`:
+
+- an `onoff` light gets no slider and no colour button, just On/Off
+- a `color_temp` light gets a warm-to-cool white slider over its own kelvin range
+- an `hs`/`xy`/`rgb` light gets hue and saturation sliders
+- a light supporting both gets all three, plus preset swatches
+
+The room-wide button in the header turns everything off if anything is on, otherwise turns
+everything on. It targets exactly the lights the card is showing, not the whole area, so
+the entities you excluded stay excluded.
 
 ## `wabit-wakeup-card`
 
@@ -200,10 +263,14 @@ is what the browser loads.
 
 ```bash
 node --check dist/wabit-cards.js   # parses
-node test/card.test.mjs            # stubs a DOM and drives the real render paths
+node test/card.test.mjs            # wakeup card
+node test/room-card.test.mjs       # room lights card
 ```
 
-`test/preview.html` renders the card outside Home Assistant, with stand-ins for
+Both suites share `test/dom-stub.mjs`, which stubs just enough of the DOM to load the
+bundle in node and drive the real render paths.
+
+`test/preview.html` and `test/preview-room.html` render the cards outside Home Assistant, with stand-ins for
 `ha-card` / `ha-icon` / `ha-switch` and Material You tokens, on a pinned clock so the
 states stay stable. It is what `docs/preview.png` is captured from - open it in a browser,
 or screenshot it headlessly:

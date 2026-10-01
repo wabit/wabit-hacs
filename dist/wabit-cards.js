@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.2.1";
+const VERSION = "1.3.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -1189,6 +1189,908 @@ if (!window.customCards.some((c) => c.type === "wabit-wakeup-card")) {
     description:
       "Wake-up light schedule: per-schedule time and enable toggle, a light " +
       "chooser, a shared fade slider, and a live sunrise ramp.",
+    preview: true,
+    documentationURL: REPO,
+  });
+}
+
+/* ------------------------------------------------- wabit-room-lights-card */
+
+/* Any of these colour modes implies a dimmable light. "onoff" does not. */
+const DIMMABLE_MODES = new Set([
+  "brightness", "color_temp", "hs", "xy", "rgb", "rgbw", "rgbww", "white",
+]);
+/* Modes that accept an actual colour (as opposed to a colour temperature). */
+const COLOUR_MODES = new Set(["hs", "xy", "rgb", "rgbw", "rgbww"]);
+
+const modesOf = (st) => (st && st.attributes && st.attributes.supported_color_modes) || [];
+const supportsBrightness = (st) => modesOf(st).some((m) => DIMMABLE_MODES.has(m));
+const supportsColour = (st) => modesOf(st).some((m) => COLOUR_MODES.has(m));
+const supportsTemp = (st) => modesOf(st).includes("color_temp");
+
+/** 0-100, and 0 whenever the light is off. */
+function brightnessPct(st) {
+  if (!st || st.state !== "on") return 0;
+  const b = st.attributes && st.attributes.brightness;
+  if (b === undefined || b === null) return 100; // on, but not dimmable
+  return Math.max(1, Math.round((Number(b) / 255) * 100));
+}
+
+/** A CSS colour approximating what the bulb is currently showing, or null when off. */
+function lightColourCss(st) {
+  if (!st || st.state !== "on") return null;
+  const a = st.attributes || {};
+  if (Array.isArray(a.rgb_color) && a.rgb_color.length >= 3) {
+    return `rgb(${a.rgb_color.slice(0, 3).join(",")})`;
+  }
+  if (Array.isArray(a.hs_color) && a.hs_color.length >= 2) {
+    return `hsl(${a.hs_color[0]}deg ${a.hs_color[1]}% 60%)`;
+  }
+  return null;
+}
+
+/** Accepts an area_id, an area name, or one of its aliases. */
+function resolveAreaId(hass, wanted) {
+  const areas = (hass && hass.areas) || {};
+  if (!wanted) return null;
+  if (areas[wanted]) return wanted;
+  const want = String(wanted).trim().toLowerCase();
+  for (const [id, area] of Object.entries(areas)) {
+    if (String(area.name || "").trim().toLowerCase() === want) return id;
+    const aliases = Array.isArray(area.aliases) ? area.aliases : [];
+    if (aliases.some((a) => String(a || "").trim().toLowerCase() === want)) return id;
+  }
+  return null;
+}
+
+/**
+ * Every light entity belonging to an area. An entity can be placed in an area
+ * directly, but usually inherits it from its device, so both must be checked.
+ * Config/diagnostic entities are skipped - those are things like access-point
+ * status LEDs, which are lights to Home Assistant but not to a person.
+ */
+function lightsInArea(hass, areaId) {
+  const entities = (hass && hass.entities) || {};
+  const devices = (hass && hass.devices) || {};
+  const out = [];
+  for (const [id, ent] of Object.entries(entities)) {
+    if (!id.startsWith("light.")) continue;
+    if (ent.entity_category) continue;
+    if (ent.hidden || ent.hidden_by || ent.disabled_by) continue;
+    const device = ent.device_id ? devices[ent.device_id] : null;
+    const area = ent.area_id || (device ? device.area_id : null);
+    if (area !== areaId) continue;
+    if (!hass.states[id]) continue;
+    out.push(id);
+  }
+  return out;
+}
+
+/** Entity ids that are members of some other light's group, within `ids`. */
+function groupMemberIds(hass, ids) {
+  const members = new Set();
+  for (const id of ids) {
+    const st = hass.states[id];
+    const g = st && st.attributes && st.attributes.group_entities;
+    if (Array.isArray(g)) g.forEach((m) => members.add(m));
+  }
+  return members;
+}
+
+const SWATCHES = [
+  { label: "Warm", kelvin: 2200 },
+  { label: "Soft", kelvin: 2700 },
+  { label: "Neutral", kelvin: 4000 },
+  { label: "Cool", kelvin: 6000 },
+  { label: "Red", hs: [0, 100] },
+  { label: "Orange", hs: [28, 100] },
+  { label: "Green", hs: [120, 85] },
+  { label: "Blue", hs: [220, 95] },
+  { label: "Purple", hs: [280, 85] },
+];
+
+const ROOM_STYLES = `
+  :host {
+    display: block;
+    --wc-text: var(--md-sys-color-on-surface, var(--primary-text-color, #212121));
+    --wc-muted: var(--md-sys-color-on-surface-variant, var(--secondary-text-color, #727272));
+    --wc-accent: var(--md-sys-color-primary, var(--primary-color, #3f51b5));
+    --wc-tonal: var(--md-sys-color-surface-container-highest,
+                 rgba(var(--rgb-primary-text-color, 33, 33, 33), 0.08));
+    --wc-outline: var(--md-sys-color-outline-variant, var(--divider-color, #e0e0e0));
+    --wc-accent-tonal: var(--md-sys-color-primary-container,
+                        rgba(var(--rgb-primary-color, 63, 81, 181), 0.16));
+    --wc-on-accent-tonal: var(--md-sys-color-on-primary-container, var(--wc-accent));
+  }
+  ha-card { overflow: hidden; }
+  .body { padding: 8px 16px 16px; }
+
+  .header { display: flex; align-items: center; gap: 8px; padding: 12px 16px 4px; }
+  .heading { flex: 1; min-width: 0; }
+  .title {
+    color: var(--ha-card-header-color, var(--wc-text));
+    font-family: var(--ha-card-header-font-family, inherit);
+    font-size: var(--ha-card-header-font-size, 24px);
+    font-weight: 400; letter-spacing: -0.012em; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .summary {
+    color: var(--wc-muted); font-size: 0.8rem; margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .all {
+    flex: none; display: flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; padding: 0; border: none; border-radius: 50%;
+    background: none; cursor: pointer; color: var(--wc-muted);
+    transition: background 160ms, color 160ms;
+  }
+  .all:hover { background: var(--wc-tonal); color: var(--wc-text); }
+  .all:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: 2px; }
+  .all.lit { background: var(--wc-accent-tonal); color: var(--wc-on-accent-tonal); }
+  .all .icon { color: inherit; --mdc-icon-size: 22px; }
+
+  .light { padding: 8px 0; border-top: 1px solid var(--wc-outline); }
+  .light:first-of-type { border-top: none; }
+  .top { display: flex; align-items: center; gap: 10px; }
+  .bulb {
+    flex: none; display: flex; align-items: center; justify-content: center;
+    width: 38px; height: 38px; padding: 0; border: none; border-radius: 50%;
+    cursor: pointer; background: var(--wc-tonal); color: var(--wc-muted);
+    transition: background 180ms, color 180ms, box-shadow 180ms;
+  }
+  .bulb:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: 2px; }
+  .bulb.lit { background: var(--wc-accent-tonal); color: var(--wc-on-accent-tonal); }
+  .bulb .icon { color: inherit; --mdc-icon-size: 21px; }
+  .name {
+    flex: 1; min-width: 0; color: var(--wc-text); font-size: 0.98rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .light.off .name { color: var(--wc-muted); }
+  .pct {
+    color: var(--wc-muted); font-size: 0.85rem; min-width: 3.1em;
+    text-align: right; font-variant-numeric: tabular-nums;
+  }
+  .swatch-btn {
+    flex: none; width: 30px; height: 30px; padding: 0; border-radius: 50%;
+    cursor: pointer; border: 2px solid var(--wc-outline); background: var(--wc-tonal);
+    transition: border-color 160ms, transform 160ms;
+  }
+  .swatch-btn:hover { transform: scale(1.08); }
+  .swatch-btn:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: 2px; }
+  .swatch-btn.open { border-color: var(--wc-accent); }
+
+  .bri { margin: 6px 0 2px 48px; }
+  .bri.hidden { display: none; }
+  input[type="range"].dim {
+    width: 100%; cursor: pointer; accent-color: var(--wc-accent);
+  }
+  input[type="range"]:disabled { cursor: default; opacity: 0.45; }
+
+  .colour { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 240ms ease; }
+  .colour.open { grid-template-rows: 1fr; }
+  .colour-inner { overflow: hidden; min-height: 0; }
+  .colour-pad { margin: 6px 0 2px 48px; display: flex; flex-direction: column; gap: 8px; }
+  .ctl { display: flex; align-items: center; gap: 10px; }
+  .ctl-label {
+    color: var(--wc-muted); font-size: 0.72rem; width: 3.4em; flex: none;
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  input[type="range"].strip {
+    flex: 1; width: 100%; cursor: pointer; height: 14px; border-radius: 999px;
+    -webkit-appearance: none; appearance: none; border: 1px solid var(--wc-outline);
+  }
+  input[type="range"].strip::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 16px; height: 16px;
+    border-radius: 50%; background: #fff; border: 2px solid rgba(0,0,0,0.35);
+    cursor: pointer;
+  }
+  input[type="range"].strip::-moz-range-thumb {
+    width: 14px; height: 14px; border-radius: 50%; background: #fff;
+    border: 2px solid rgba(0,0,0,0.35); cursor: pointer;
+  }
+  .hue { background: linear-gradient(90deg,
+    hsl(0 100% 50%), hsl(60 100% 50%), hsl(120 100% 50%),
+    hsl(180 100% 50%), hsl(240 100% 50%), hsl(300 100% 50%), hsl(360 100% 50%)); }
+  .temp { background: linear-gradient(90deg, #ffb46b, #ffd6aa, #fff4e8, #f2f6ff, #cfe0ff); }
+  .swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+  .preset {
+    width: 24px; height: 24px; border-radius: 50%; cursor: pointer;
+    border: 1px solid var(--wc-outline); padding: 0;
+  }
+  .preset:hover { transform: scale(1.1); }
+  .preset:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: 2px; }
+
+  .more { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 260ms ease; }
+  .more.open { grid-template-rows: 1fr; }
+  .more-inner { overflow: hidden; min-height: 0; }
+  .more-btn {
+    width: 100%; margin-top: 8px; padding: 9px 12px; border-radius: 999px;
+    border: 1px solid var(--wc-outline); background: none; cursor: pointer;
+    color: var(--wc-muted); font: inherit; font-size: 0.85rem;
+    transition: background 160ms, color 160ms;
+  }
+  .more-btn:hover { background: var(--wc-tonal); color: var(--wc-text); }
+  .more-btn:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: 2px; }
+  .more-btn.hidden { display: none; }
+
+  .empty { color: var(--wc-muted); font-size: 0.9rem; padding: 8px 0 4px; line-height: 1.5; }
+  .error { color: var(--error-color, #db4437); font-size: 0.9rem; padding: 8px 0; line-height: 1.5; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .colour, .more { transition: none; }
+  }
+`;
+
+class WabitRoomLightsCard extends HTMLElement {
+  static getConfigElement() {
+    return document.createElement("wabit-room-lights-card-editor");
+  }
+
+  static getStubConfig(hass) {
+    const areas = (hass && hass.areas) || {};
+    // Offer the area with the most lights - the one this card helps with most.
+    let best = null;
+    for (const id of Object.keys(areas)) {
+      const n = lightsInArea(hass, id).length;
+      if (n && (!best || n > best.n)) best = { id, n };
+    }
+    return { type: "custom:wabit-room-lights-card", area: best ? best.id : "" };
+  }
+
+  setConfig(config) {
+    const cfg = config || {};
+    if (isUnset(cfg.area)) {
+      throw new Error("wabit-room-lights-card: `area` is required");
+    }
+    const lightList = (v, key) => {
+      if (v === undefined || v === null) return null;
+      if (!Array.isArray(v)) {
+        throw new Error(`wabit-room-lights-card: \`${key}\` must be a list of light entities`);
+      }
+      v.forEach((e) => {
+        if (typeof e !== "string" || !e.startsWith("light.")) {
+          throw new Error(
+            `wabit-room-lights-card: \`${key}\` may only contain light entities, got "${e}"`
+          );
+        }
+      });
+      return v;
+    };
+
+    this._config = {
+      area: String(cfg.area),
+      title: cfg.title,
+      pinned: lightList(cfg.pinned, "pinned"),
+      exclude: lightList(cfg.exclude, "exclude") || [],
+      collapse_groups: cfg.collapse_groups === true,
+      show_header: cfg.show_header !== false,
+      show_brightness: cfg.show_brightness !== false,
+      show_colour: cfg.show_colour !== false && cfg.show_color !== false,
+      strip_area_name: cfg.strip_area_name !== false,
+    };
+
+    this._built = false;
+    this._rowsKey = null;
+    this._openColour = this._openColour || new Set();
+    if (this.shadowRoot) this.shadowRoot.innerHTML = "";
+    if (this._hass) this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._config) this._render();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  getCardSize() {
+    const m = this._lastModel;
+    if (!m || m.error) return 4;
+    // Each light is a name row plus its brightness slider; extras start collapsed.
+    return 1 + m.pinned.length * 2;
+  }
+
+  /** Work out which lights belong here and how they are split. */
+  _model() {
+    const hass = this._hass;
+    const cfg = this._config;
+
+    if (!hass.entities || !hass.areas) {
+      return { error: "This Home Assistant build does not expose the area registry to cards." };
+    }
+    const areaId = resolveAreaId(hass, cfg.area);
+    if (!areaId) return { error: `No area called "${cfg.area}".` };
+
+    const areaName = (hass.areas[areaId] || {}).name || cfg.area;
+    const excluded = new Set(cfg.exclude);
+    let ids = lightsInArea(hass, areaId).filter((id) => !excluded.has(id));
+
+    const byName = (a, b) => this._nameOf(a, areaName).localeCompare(this._nameOf(b, areaName));
+    ids.sort(byName);
+
+    let pinned;
+    let extra;
+    if (cfg.pinned) {
+      const pinSet = new Set(cfg.pinned);
+      // Keep the configured order, but only for lights actually in the area.
+      pinned = cfg.pinned.filter((id) => ids.includes(id));
+      extra = ids.filter((id) => !pinSet.has(id));
+    } else if (cfg.collapse_groups) {
+      const members = groupMemberIds(hass, ids);
+      pinned = ids.filter((id) => !members.has(id));
+      extra = ids.filter((id) => members.has(id));
+      if (!pinned.length) { pinned = ids; extra = []; } // never hide everything
+    } else {
+      pinned = ids;
+      extra = [];
+    }
+
+    return { areaId, areaName, pinned, extra, all: pinned.concat(extra) };
+  }
+
+  _nameOf(id, areaName) {
+    const hass = this._hass;
+    const reg = (hass.entities || {})[id] || {};
+    const st = hass.states[id];
+    let name = reg.name || (st && st.attributes && st.attributes.friendly_name) || id;
+    if (this._config.strip_area_name && areaName) {
+      // "Living Room - Ceiling All" reads better as "Ceiling All" inside a room
+      // card. Plain string work rather than a built regex, so no escaping worries.
+      if (name.toLowerCase().startsWith(areaName.toLowerCase())) {
+        const rest = name.slice(areaName.length).replace(/^[\s:-]+/, "").trim();
+        if (rest) name = rest;
+      }
+    }
+    return name;
+  }
+
+  _render() {
+    if (!this._config || !this._hass) return;
+    if (!this._built) this._buildShell();
+    const model = this._model();
+    this._lastModel = model;
+
+    if (model.error) {
+      this._els.error.textContent = model.error;
+      this._els.error.style.display = "";
+      this._els.pinned.style.display = "none";
+      this._els.moreBtn.classList.add("hidden");
+      this._els.more.classList.remove("open");
+      return;
+    }
+    this._els.error.style.display = "none";
+    this._els.pinned.style.display = "";
+
+    const key = JSON.stringify([model.areaId, model.pinned, model.extra]);
+    if (key !== this._rowsKey) {
+      this._rowsKey = key;
+      this._buildRows(model);
+    }
+    this._update(model);
+  }
+
+  _buildShell() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = ROOM_STYLES;
+    root.appendChild(style);
+
+    const card = document.createElement("ha-card");
+    root.appendChild(card);
+
+    this._els = { rows: new Map() };
+
+    if (this._config.show_header) {
+      const header = document.createElement("div");
+      header.className = "header";
+      const heading = document.createElement("div");
+      heading.className = "heading";
+      const title = document.createElement("div");
+      title.className = "title";
+      const summary = document.createElement("div");
+      summary.className = "summary";
+      heading.append(title, summary);
+
+      const all = document.createElement("button");
+      all.className = "all";
+      all.type = "button";
+      all.setAttribute("aria-label", "Toggle all lights in this room");
+      all.appendChild(this._makeIcon("mdi:lightbulb-group-outline"));
+      all.addEventListener("click", () => this._toggleAll());
+
+      header.append(heading, all);
+      card.appendChild(header);
+      this._els.header = { title, summary, all };
+    }
+
+    const body = document.createElement("div");
+    body.className = "body";
+    card.appendChild(body);
+
+    const error = document.createElement("div");
+    error.className = "error";
+    error.style.display = "none";
+    body.appendChild(error);
+
+    const pinned = document.createElement("div");
+    pinned.className = "pinned";
+    body.appendChild(pinned);
+
+    const more = document.createElement("div");
+    more.className = "more";
+    const moreInner = document.createElement("div");
+    moreInner.className = "more-inner";
+    more.appendChild(moreInner);
+    body.appendChild(more);
+
+    const moreBtn = document.createElement("button");
+    moreBtn.className = "more-btn hidden";
+    moreBtn.type = "button";
+    moreBtn.setAttribute("aria-expanded", "false");
+    moreBtn.addEventListener("click", () => this._toggleMore());
+    body.appendChild(moreBtn);
+
+    this._els.error = error;
+    this._els.pinned = pinned;
+    this._els.more = more;
+    this._els.moreInner = moreInner;
+    this._els.moreBtn = moreBtn;
+    this._moreOpen = false;
+    this._built = true;
+  }
+
+  _makeIcon(icon) {
+    if (customElements.get("ha-icon")) {
+      const el = document.createElement("ha-icon");
+      el.setAttribute("icon", icon);
+      el.className = "icon";
+      return el;
+    }
+    const span = document.createElement("span");
+    span.className = "icon";
+    return span;
+  }
+
+  _buildRows(model) {
+    this._els.pinned.innerHTML = "";
+    this._els.moreInner.innerHTML = "";
+    this._els.rows = new Map();
+
+    model.pinned.forEach((id) => this._els.pinned.appendChild(this._buildRow(id, model)));
+    model.extra.forEach((id) => this._els.moreInner.appendChild(this._buildRow(id, model)));
+
+    const n = model.extra.length;
+    this._els.moreBtn.classList.toggle("hidden", n === 0);
+    if (!n) {
+      this._moreOpen = false;
+      this._els.more.classList.remove("open");
+    }
+    this._els.moreBtn.textContent = this._moreOpen ? "Show less" : `Show ${n} more`;
+
+    if (!model.pinned.length && !n) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = `No lights found in ${model.areaName}.`;
+      this._els.pinned.appendChild(empty);
+    }
+  }
+
+  _buildRow(id, model) {
+    const wrap = document.createElement("div");
+    wrap.className = "light";
+
+    const top = document.createElement("div");
+    top.className = "top";
+
+    const bulb = document.createElement("button");
+    bulb.className = "bulb";
+    bulb.type = "button";
+    bulb.setAttribute("aria-label", `Toggle ${this._nameOf(id, model.areaName)}`);
+    bulb.appendChild(this._makeIcon("mdi:lightbulb"));
+    bulb.addEventListener("click", () => this._toggle(id));
+
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = this._nameOf(id, model.areaName);
+
+    const pct = document.createElement("div");
+    pct.className = "pct";
+
+    const swatchBtn = document.createElement("button");
+    swatchBtn.className = "swatch-btn";
+    swatchBtn.type = "button";
+    swatchBtn.setAttribute("aria-label", `Colour for ${this._nameOf(id, model.areaName)}`);
+    swatchBtn.setAttribute("aria-expanded", "false");
+    swatchBtn.addEventListener("click", () => this._toggleColour(id));
+
+    top.append(bulb, name, pct, swatchBtn);
+    wrap.appendChild(top);
+
+    const briWrap = document.createElement("div");
+    briWrap.className = "bri";
+    const dim = document.createElement("input");
+    dim.type = "range";
+    dim.className = "dim";
+    dim.min = "1";
+    dim.max = "100";
+    dim.step = "1";
+    dim.addEventListener("input", () => { pct.textContent = `${dim.value}%`; });
+    dim.addEventListener("change", () => this._setBrightness(id, Number(dim.value)));
+    briWrap.appendChild(dim);
+    wrap.appendChild(briWrap);
+
+    const colour = document.createElement("div");
+    colour.className = "colour";
+    const colourInner = document.createElement("div");
+    colourInner.className = "colour-inner";
+    colour.appendChild(colourInner);
+    wrap.appendChild(colour);
+
+    this._els.rows.set(id, {
+      wrap, bulb, name, pct, swatchBtn, briWrap, dim,
+      colour, colourInner, colourBuilt: false, controls: null,
+    });
+    return wrap;
+  }
+
+  /** Colour controls are built on first open - 20 lights would be a lot of sliders up front. */
+  _buildColour(id) {
+    const row = this._els.rows.get(id);
+    const st = this._hass.states[id];
+    if (!row || row.colourBuilt || !st) return;
+
+    const pad = document.createElement("div");
+    pad.className = "colour-pad";
+    const controls = { temp: null, hue: null, sat: null };
+
+    if (supportsTemp(st)) {
+      const line = document.createElement("div");
+      line.className = "ctl";
+      const label = document.createElement("div");
+      label.className = "ctl-label";
+      label.textContent = "White";
+      const temp = document.createElement("input");
+      temp.type = "range";
+      temp.className = "strip temp";
+      const a = st.attributes || {};
+      temp.min = String(a.min_color_temp_kelvin || 2000);
+      temp.max = String(a.max_color_temp_kelvin || 6500);
+      temp.step = "50";
+      temp.addEventListener("change", () => this._setTemp(id, Number(temp.value)));
+      line.append(label, temp);
+      pad.appendChild(line);
+      controls.temp = temp;
+    }
+
+    if (supportsColour(st)) {
+      const hueLine = document.createElement("div");
+      hueLine.className = "ctl";
+      const hueLabel = document.createElement("div");
+      hueLabel.className = "ctl-label";
+      hueLabel.textContent = "Hue";
+      const hue = document.createElement("input");
+      hue.type = "range";
+      hue.className = "strip hue";
+      hue.min = "0"; hue.max = "360"; hue.step = "1";
+      hue.addEventListener("change", () => this._setHs(id, Number(hue.value), null));
+      hueLine.append(hueLabel, hue);
+      pad.appendChild(hueLine);
+      controls.hue = hue;
+
+      const satLine = document.createElement("div");
+      satLine.className = "ctl";
+      const satLabel = document.createElement("div");
+      satLabel.className = "ctl-label";
+      satLabel.textContent = "Sat";
+      const sat = document.createElement("input");
+      sat.type = "range";
+      sat.className = "strip";
+      sat.min = "0"; sat.max = "100"; sat.step = "1";
+      sat.addEventListener("change", () => this._setHs(id, null, Number(sat.value)));
+      satLine.append(satLabel, sat);
+      pad.appendChild(satLine);
+      controls.sat = sat;
+    }
+
+    const swatches = document.createElement("div");
+    swatches.className = "swatches";
+    SWATCHES.forEach((s) => {
+      if (s.kelvin && !supportsTemp(st)) return;
+      if (s.hs && !supportsColour(st)) return;
+      const b = document.createElement("button");
+      b.className = "preset";
+      b.type = "button";
+      b.title = s.label;
+      b.setAttribute("aria-label", s.label);
+      b.style.background = s.hs
+        ? `hsl(${s.hs[0]}deg ${s.hs[1]}% 55%)`
+        : kelvinToCss(s.kelvin);
+      b.addEventListener("click", () => {
+        if (s.kelvin) this._setTemp(id, s.kelvin);
+        else this._setHs(id, s.hs[0], s.hs[1]);
+      });
+      swatches.appendChild(b);
+    });
+    if (swatches.children.length) pad.appendChild(swatches);
+
+    row.colourInner.appendChild(pad);
+    row.controls = controls;
+    row.colourBuilt = true;
+  }
+
+  _update(model) {
+    const hass = this._hass;
+    const dark = !!(hass.themes && hass.themes.darkMode);
+    this.style.colorScheme = dark ? "dark" : "light";
+
+    let on = 0;
+    let briSum = 0;
+    let briCount = 0;
+
+    for (const id of model.all) {
+      const row = this._els.rows.get(id);
+      const st = hass.states[id];
+      if (!row || !st) continue;
+
+      const lit = st.state === "on";
+      if (lit) on += 1;
+      const pct = brightnessPct(st);
+      const dimmable = supportsBrightness(st);
+      if (lit && dimmable) { briSum += pct; briCount += 1; }
+
+      row.wrap.classList.toggle("off", !lit);
+      row.bulb.classList.toggle("lit", lit);
+
+      const colour = lightColourCss(st);
+      // Tint the bulb button with the light's actual colour when it has one.
+      row.bulb.style.background = lit && colour ? colour : "";
+      row.bulb.style.color = lit && colour ? "#1a1a1a" : "";
+
+      row.swatchBtn.style.background = colour || "";
+      const showSwatch =
+        this._config.show_colour && (supportsColour(st) || supportsTemp(st));
+      row.swatchBtn.style.display = showSwatch ? "" : "none";
+
+      const showBri = this._config.show_brightness && dimmable;
+      row.briWrap.classList.toggle("hidden", !showBri);
+      row.dim.disabled = !lit;
+      if (this.shadowRoot.activeElement !== row.dim) row.dim.value = String(pct || 1);
+
+      if (!dimmable) row.pct.textContent = lit ? "On" : "Off";
+      else row.pct.textContent = lit ? `${pct}%` : "Off";
+
+      if (row.colourBuilt && row.controls) {
+        const a = st.attributes || {};
+        const c = row.controls;
+        if (c.temp && this.shadowRoot.activeElement !== c.temp && a.color_temp_kelvin) {
+          c.temp.value = String(a.color_temp_kelvin);
+        }
+        if (Array.isArray(a.hs_color)) {
+          if (c.hue && this.shadowRoot.activeElement !== c.hue) {
+            c.hue.value = String(Math.round(a.hs_color[0]));
+          }
+          if (c.sat && this.shadowRoot.activeElement !== c.sat) {
+            c.sat.value = String(Math.round(a.hs_color[1]));
+          }
+        }
+      }
+    }
+
+    if (this._els.header) {
+      const total = model.all.length;
+      this._els.header.title.textContent =
+        this._config.title === undefined ? model.areaName : this._config.title;
+      const avg = briCount ? Math.round(briSum / briCount) : 0;
+      this._els.header.summary.textContent = !total
+        ? "No lights"
+        : on === 0
+          ? `All off - ${total} light${total === 1 ? "" : "s"}`
+          : `${on} of ${total} on${avg ? ` - ${avg}%` : ""}`;
+      this._els.header.all.classList.toggle("lit", on > 0);
+    }
+
+    const n = model.extra.length;
+    if (n) this._els.moreBtn.textContent = this._moreOpen ? "Show less" : `Show ${n} more`;
+  }
+
+  _toggleMore() {
+    this._moreOpen = !this._moreOpen;
+    this._els.more.classList.toggle("open", this._moreOpen);
+    this._els.moreBtn.setAttribute("aria-expanded", String(this._moreOpen));
+    const n = this._lastModel ? this._lastModel.extra.length : 0;
+    this._els.moreBtn.textContent = this._moreOpen ? "Show less" : `Show ${n} more`;
+  }
+
+  _toggleColour(id) {
+    const row = this._els.rows.get(id);
+    if (!row) return;
+    const open = !this._openColour.has(id);
+    if (open) {
+      this._buildColour(id);
+      this._openColour.add(id);
+    } else {
+      this._openColour.delete(id);
+    }
+    row.colour.classList.toggle("open", open);
+    row.swatchBtn.classList.toggle("open", open);
+    row.swatchBtn.setAttribute("aria-expanded", String(open));
+    if (open && this._lastModel) this._update(this._lastModel);
+  }
+
+  _toggle(id) {
+    this._hass.callService("light", "toggle", { entity_id: id });
+  }
+
+  _toggleAll() {
+    const model = this._lastModel;
+    if (!model || !model.all || !model.all.length) return;
+    const anyOn = model.all.some((id) => {
+      const st = this._hass.states[id];
+      return st && st.state === "on";
+    });
+    // Target exactly the lights this card shows, not the whole area - the card
+    // deliberately filters some entities out.
+    this._hass.callService("light", anyOn ? "turn_off" : "turn_on", {
+      entity_id: model.all,
+    });
+  }
+
+  _setBrightness(id, pct) {
+    if (!Number.isFinite(pct)) return;
+    this._hass.callService("light", "turn_on", {
+      entity_id: id,
+      brightness_pct: Math.max(1, Math.min(100, Math.round(pct))),
+    });
+  }
+
+  _setTemp(id, kelvin) {
+    if (!Number.isFinite(kelvin)) return;
+    this._hass.callService("light", "turn_on", { entity_id: id, color_temp_kelvin: kelvin });
+  }
+
+  _setHs(id, hue, sat) {
+    const st = this._hass.states[id];
+    const current = (st && st.attributes && st.attributes.hs_color) || [0, 100];
+    const h = hue === null ? current[0] : hue;
+    const s = sat === null ? current[1] : sat;
+    this._hass.callService("light", "turn_on", {
+      entity_id: id,
+      hs_color: [Math.round(h), Math.round(s)],
+    });
+  }
+}
+
+/** Rough blackbody colour for a kelvin value, good enough for a swatch. */
+function kelvinToCss(k) {
+  const t = Math.max(1000, Math.min(12000, k)) / 100;
+  let r, g, b;
+  if (t <= 66) {
+    r = 255;
+    g = 99.47 * Math.log(t) - 161.12;
+    b = t <= 19 ? 0 : 138.52 * Math.log(t - 10) - 305.04;
+  } else {
+    r = 329.7 * Math.pow(t - 60, -0.1332);
+    g = 288.12 * Math.pow(t - 60, -0.0755);
+    b = 255;
+  }
+  const c = (v) => Math.max(0, Math.min(255, Math.round(v)));
+  return `rgb(${c(r)}, ${c(g)}, ${c(b)})`;
+}
+
+/* ------------------------------------------ wabit-room-lights-card-editor */
+
+const ROOM_LABELS = {
+  area: "Room",
+  title: "Card title (defaults to the room name)",
+  pinned: "Always visible (everything else moves behind \"Show more\")",
+  exclude: "Never show",
+  collapse_groups: "Tuck group members away when nothing is pinned",
+  show_header: "Show the room header",
+  show_brightness: "Show brightness sliders",
+  show_colour: "Show colour controls",
+  strip_area_name: "Trim the room name off each light's label",
+};
+
+const ROOM_SCHEMA = [
+  { name: "area", required: true, selector: { area: {} } },
+  { name: "title", selector: { text: {} } },
+  { name: "pinned", selector: { entity: { domain: "light", multiple: true } } },
+  { name: "exclude", selector: { entity: { domain: "light", multiple: true } } },
+  { name: "collapse_groups", selector: { boolean: {} } },
+  { name: "show_brightness", selector: { boolean: {} } },
+  { name: "show_colour", selector: { boolean: {} } },
+  { name: "show_header", selector: { boolean: {} } },
+  { name: "strip_area_name", selector: { boolean: {} } },
+];
+
+class WabitRoomLightsCardEditor extends HTMLElement {
+  setConfig(config) {
+    this._config = { ...(config || {}) };
+    if (!this._built) this._build();
+    this._push();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._push();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  _build() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = EDITOR_STYLES;
+    root.appendChild(style);
+
+    if (!customElements.get("ha-form")) {
+      const note = document.createElement("div");
+      note.className = "note";
+      note.textContent =
+        "This Home Assistant build does not provide ha-form, so the visual editor " +
+        "is unavailable. Configure this card in YAML instead - the options are " +
+        "documented at " + REPO;
+      root.appendChild(note);
+      this._form = null;
+      this._built = true;
+      return;
+    }
+
+    const form = document.createElement("ha-form");
+    form.schema = ROOM_SCHEMA;
+    form.computeLabel = (s) => ROOM_LABELS[s.name] || s.name;
+    form.addEventListener("value-changed", (ev) => {
+      ev.stopPropagation();
+      this._config = { ...this._config, ...ev.detail.value };
+      fireEvent(this, "config-changed", { config: this._config });
+    });
+    root.appendChild(form);
+    this._form = form;
+    this._built = true;
+  }
+
+  _push() {
+    if (!this._form || !this._hass || !this._config) return;
+    this._form.hass = this._hass;
+    const data = {
+      area: this._config.area,
+      title: this._config.title,
+      pinned: this._config.pinned,
+      exclude: this._config.exclude,
+      collapse_groups: this._config.collapse_groups === true,
+      show_brightness: this._config.show_brightness !== false,
+      show_colour: this._config.show_colour !== false && this._config.show_color !== false,
+      show_header: this._config.show_header !== false,
+      strip_area_name: this._config.strip_area_name !== false,
+    };
+    if (JSON.stringify(this._form.data) !== JSON.stringify(data)) this._form.data = data;
+  }
+}
+
+if (!customElements.get("wabit-room-lights-card")) {
+  customElements.define("wabit-room-lights-card", WabitRoomLightsCard);
+}
+if (!customElements.get("wabit-room-lights-card-editor")) {
+  customElements.define("wabit-room-lights-card-editor", WabitRoomLightsCardEditor);
+}
+
+if (!window.customCards.some((c) => c.type === "wabit-room-lights-card")) {
+  window.customCards.push({
+    type: "wabit-room-lights-card",
+    name: "Wabit Room Lights",
+    description:
+      "Every light in a room, found automatically: pin the ones you use, tuck the " +
+      "rest behind Show more, with brightness and colour per light.",
     preview: true,
     documentationURL: REPO,
   });

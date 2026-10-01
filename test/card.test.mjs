@@ -1,79 +1,11 @@
 /**
- * Tests for the Wabit cards.
- *
- * The card is a browser script, so this stubs just enough of the DOM to load it
- * in node and drive the real setConfig/_build/_update code paths.
+ * Tests for wabit-wakeup-card.
  *
  *   node test/card.test.mjs
  */
-import fs from "fs";
+import { loadCards } from "./dom-stub.mjs";
 
-/* ------------------------------------------------ minimal DOM stand-in */
-function mkEl(tag) {
-  const classes = new Set();
-  const handlers = {};
-  const el = {
-    tagName: tag,
-    children: [],
-    _handlers: handlers,
-    textContent: "",
-    title: "",
-    style: {},
-    attrs: {},
-    get className() { return [...classes].join(" "); },
-    set className(v) {
-      classes.clear();
-      String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c));
-    },
-    classList: {
-      add: (c) => classes.add(c),
-      remove: (c) => classes.delete(c),
-      contains: (c) => classes.has(c),
-      toggle: (c, force) => {
-        const on = force === undefined ? !classes.has(c) : !!force;
-        if (on) classes.add(c); else classes.delete(c);
-        return on;
-      },
-    },
-    setAttribute(n, v) { el.attrs[n] = v; },
-    get innerHTML() { return ""; },
-    set innerHTML(_) { el.children.length = 0; },
-    getAttribute(n) { return el.attrs[n]; },
-    appendChild(c) { el.children.push(c); return c; },
-    append(...cs) { cs.forEach((c) => el.children.push(c)); },
-    addEventListener(t, fn) { (handlers[t] = handlers[t] || []).push(fn); },
-    dispatchEvent() { return true; },
-    _fire(t) { (handlers[t] || []).forEach((fn) => fn({ stopPropagation() {} })); },
-  };
-  return el;
-}
-
-function mkShadow() {
-  const root = mkEl("#shadow");
-  root.activeElement = null;
-  Object.defineProperty(root, "innerHTML", {
-    get() { return ""; },
-    set() { root.children.length = 0; },
-  });
-  return root;
-}
-
-globalThis.HTMLElement = class {
-  constructor() { this.style = {}; this.shadowRoot = null; }
-  attachShadow() { this.shadowRoot = mkShadow(); return this.shadowRoot; }
-  dispatchEvent() { return true; }
-};
-globalThis.document = { createElement: mkEl };
-globalThis.customElements = { _d: {}, get(n) { return this._d[n]; }, define(n, c) { this._d[n] = c; } };
-globalThis.window = { customCards: [], setInterval: () => 0, clearInterval: () => {} };
-globalThis.Event = class { constructor(t) { this.type = t; } };
-
-/* ------------------------------------------------------- load the card */
-const target = process.argv[2] || new URL("../dist/wabit-cards.js", import.meta.url).pathname;
-const src = fs.readFileSync(target, "utf8") +
-  "\nglobalThis.__T = { timeToMinutes, minutesToTime, humanDuration, normaliseDays, minutesUntilNext, WabitWakeupCard, WabitWakeupCardEditor };";
-new Function(src)();
-const T = globalThis.__T;
+const T = loadCards(process.argv[2]);
 
 /* ----------------------------------------------------------- assertions */
 let pass = 0, fail = 0;
