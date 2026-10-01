@@ -79,7 +79,8 @@ beside it. If your feed's own wording disagrees, the date is what the card trust
 whose date will not parse still appears, using the sensor's own wording, sorted last.
 
 Today and tomorrow get a solid chip instead of a tonal one, so an imminent collection
-reads differently at a glance.
+reads differently at a glance. Dates are formatted in Home Assistant's own language
+(`hass.locale`), not the browser's, so the card reads the same as the rest of HA.
 
 ## `wabit-room-lights-card`
 

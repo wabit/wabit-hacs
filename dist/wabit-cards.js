@@ -2404,9 +2404,13 @@ function relativeDays(days) {
   return `in ${days} days`;
 }
 
-function formatBinDate(date) {
+/**
+ * Formatted in Home Assistant's own language rather than the browser's, so the
+ * card reads the same as the rest of HA for everyone looking at the dashboard.
+ */
+function formatBinDate(date, locale) {
   try {
-    return date.toLocaleDateString(undefined, {
+    return date.toLocaleDateString(locale || undefined, {
       weekday: "short", day: "numeric", month: "short",
     });
   } catch (e) {
@@ -2625,6 +2629,11 @@ class WabitBinCollectionCard extends HTMLElement {
     return { groups: list, hero, rows: hero ? list.slice(1) : list };
   }
 
+  _locale() {
+    const l = this._hass && this._hass.locale;
+    return (l && l.language) || undefined;
+  }
+
   _label(group) {
     return group.bins.map((b) => b.label).join(" + ");
   }
@@ -2675,7 +2684,9 @@ class WabitBinCollectionCard extends HTMLElement {
     }
     const g = model.hero;
     h.hero.classList.remove("hidden");
-    h.heroDate.textContent = g.date ? formatBinDate(g.date) : g.raw || "Unknown date";
+    h.heroDate.textContent = g.date
+      ? formatBinDate(g.date, this._locale())
+      : g.raw || "Unknown date";
     h.heroWhen.textContent = this._when(g);
     // Today and tomorrow earn a solid chip; anything further out stays tonal.
     h.hero.classList.toggle("soon", g.days !== null && g.days <= 1);
@@ -2718,7 +2729,7 @@ class WabitBinCollectionCard extends HTMLElement {
       label.textContent = this._label(g);
       const date = document.createElement("div");
       date.className = "row-date";
-      date.textContent = g.date ? formatBinDate(g.date) : g.raw || "";
+      date.textContent = g.date ? formatBinDate(g.date, this._locale()) : g.raw || "";
       main.append(label, date);
 
       const when = document.createElement("div");

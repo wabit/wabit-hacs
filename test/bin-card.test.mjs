@@ -25,6 +25,8 @@ const binAttrs = {
 };
 const hass = {
   themes: { darkMode: false },
+  // Pinned so date formatting does not depend on the machine's locale.
+  locale: { language: "en-GB" },
   states: {
     "sensor.bin_collection": { state: "ok", attributes: { ...binAttrs, friendly_name: "Bin Collection" } },
     "sensor.empty_bins": { state: "ok", attributes: { friendly_name: "Nothing" } },
@@ -39,6 +41,10 @@ const mk = (cfg) => {
 };
 
 /* ------------------------------------------------------------- utilities */
+eq("date format follows the given locale",
+   T.formatBinDate(new RealDate(2026, 9, 7), "en-GB"), "Wed 7 Oct");
+eq("date format differs for US English",
+   T.formatBinDate(new RealDate(2026, 9, 7), "en-US"), "Wed, Oct 7");
 eq("parses DD/MM/YYYY", T.parseDMY("07/10/2026").getTime(), new RealDate(2026, 9, 7).getTime());
 eq("parses single-digit day", T.parseDMY("7/1/2026").getTime(), new RealDate(2026, 0, 7).getTime());
 eq("rejects impossible dates", T.parseDMY("31/02/2026"), null);

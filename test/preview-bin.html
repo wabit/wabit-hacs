@@ -171,6 +171,7 @@ const SOON = { ...BINS, green: { date: "02/10/2026", relative_time: "tomorrow" }
 function makeHass(dark, attrs) {
   return {
     themes: { darkMode: dark },
+    locale: { language: "en-GB" },
     states: { "sensor.bin_collection": { state: "ok",
       attributes: { ...attrs, friendly_name: "Bin Collection" } } },
     callService: () => {},
