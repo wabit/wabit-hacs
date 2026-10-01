@@ -528,7 +528,14 @@ ed.hass = hass;
 
 const blocks = () => ed._els.list.children.filter((c) => c.classList.contains("block"));
 eq("a block per preset", blocks().length, 2);
-eq("heading uses the name", blocks()[0].children[0].children[0].textContent, "6 Music");
+// head is [thumbnail, heading, up, down, remove]
+eq("heading uses the name", blocks()[0].children[0].children[1].textContent, "6 Music");
+eq("a thumbnail shows the artwork",
+   blocks()[0].children[0].children[0].style._props, {});
+eq("thumbnail carries the image",
+   blocks()[0].children[0].children[0].style.backgroundImage, 'url("/local/6-music.png")');
+eq("thumbnail not marked empty",
+   blocks()[0].children[0].children[0].classList.contains("empty"), false);
 eq("each block has a form", ed._presetForms.length, 2);
 // Real HA controls rather than bare text boxes: an entity picker and an image chooser.
 eq("form fields", ed._presetForms[0].schema.map((f) => f.name),
@@ -536,8 +543,10 @@ eq("form fields", ed._presetForms[0].schema.map((f) => f.name),
 eq("entity field is a picker over runnable things",
    ed._presetForms[0].schema[1].selector.entity.domain,
    ["automation", "script", "scene"]);
-eq("image field is an image selector",
-   Object.keys(ed._presetForms[0].schema[2].selector)[0], "image");
+// A text field, not Home Assistant's image selector: ha-form renders nothing
+// for a selector it cannot resolve, and that one is not available everywhere.
+eq("image field always renders",
+   Object.keys(ed._presetForms[0].schema[2].selector)[0], "text");
 eq("form carries the preset", ed._presetForms[0].data,
    { name: "6 Music", entity: "automation.living_room_play_6_music",
      image: "/local/6-music.png", icon: undefined });
@@ -549,27 +558,35 @@ eq("editing emits", emitted.at(-1).presets[0].name, "BBC 6 Music");
 eq("editing keeps the rest", emitted.at(-1).presets[0].entity,
    "automation.living_room_play_6_music");
 eq("other presets untouched", emitted.at(-1).presets[1].name, "Def Con Radio");
-eq("heading follows the name", blocks()[0].children[0].children[0].textContent, "BBC 6 Music");
+eq("heading follows the name", blocks()[0].children[0].children[1].textContent, "BBC 6 Music");
 // Editing a field must not tear the rows down underneath the cursor.
 eq("rows are not rebuilt while editing", ed._presetForms.length, 2);
 
 /* presets are ordered, so they can be reordered */
-eq("first cannot move up", blocks()[0].children[0].children[1].disabled, true);
-eq("last cannot move down", blocks()[1].children[0].children[2].disabled, true);
-blocks()[0].children[0].children[2]._fire("click");
+eq("first cannot move up", blocks()[0].children[0].children[2].disabled, true);
+eq("last cannot move down", blocks()[1].children[0].children[3].disabled, true);
+blocks()[0].children[0].children[3]._fire("click");
 eq("move down reorders", emitted.at(-1).presets.map((p) => p.name),
    ["Def Con Radio", "BBC 6 Music"]);
-blocks()[1].children[0].children[1]._fire("click");
+blocks()[1].children[0].children[2]._fire("click");
 eq("move up reorders back", emitted.at(-1).presets.map((p) => p.name),
    ["BBC 6 Music", "Def Con Radio"]);
+
+const blank = new T.WabitMediaCardEditor();
+blank.setConfig({ area: "living_room", presets: [{ name: "No art", entity: "automation.x" }] });
+blank.hass = hass;
+const blankThumb = blank._els.list.children
+  .filter((c) => c.classList.contains("block"))[0].children[0].children[0];
+eq("a preset with no artwork is marked empty", blankThumb.classList.contains("empty"), true);
+eq("empty thumbnail says so", blankThumb.title, "No artwork set");
 
 ed._addPreset();
 eq("adding appends", emitted.at(-1).presets.length, 3);
 eq("three blocks now", blocks().length, 3);
-blocks()[2].children[0].children[3]._fire("click");
+blocks()[2].children[0].children[4]._fire("click");
 eq("removing drops it", emitted.at(-1).presets.length, 2);
-blocks()[1].children[0].children[3]._fire("click");
-blocks()[0].children[0].children[3]._fire("click");
+blocks()[1].children[0].children[4]._fire("click");
+blocks()[0].children[0].children[4]._fire("click");
 eq("emptying removes the key", "presets" in emitted.at(-1), false);
 eq("empty state explained",
    ed._els.list.children[0].classList.contains("empty-pins"), true);

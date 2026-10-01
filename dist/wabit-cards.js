@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.13.0";
+const VERSION = "1.13.1";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -1036,6 +1036,12 @@ const EDITOR_STYLES = `
     line-height: 1.45; margin-bottom: 8px;
   }
   .preset-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+  .preset-thumb {
+    flex: none; width: 34px; height: 34px; border-radius: 8px;
+    background: var(--divider-color) center/cover no-repeat;
+    border: 1px solid var(--divider-color);
+  }
+  .preset-thumb.empty { background-image: none; opacity: 0.5; }
   .preset-row { display: flex; align-items: center; gap: 6px; }
   .preset-row input[type="text"] {
     min-width: 0; font: inherit; font-size: 0.85rem; padding: 7px 9px;
@@ -4224,14 +4230,21 @@ const MEDIA_LABELS = {
 const PRESET_LABELS = {
   name: "Name",
   entity: "Automation, script or scene to run",
-  image: "Artwork",
+  image: "Artwork - a path or URL, such as /local/6-music.png",
   icon: "Icon (used when there is no artwork)",
 };
 
+/**
+ * `image` is a plain text field rather than Home Assistant's image selector.
+ * ha-form renders nothing at all for a selector it cannot resolve, and that
+ * one is not available everywhere - the field simply vanished. A text field
+ * always renders, and the thumbnail beside each preset shows whether what you
+ * typed actually resolves.
+ */
 const PRESET_SCHEMA = [
   { name: "name", selector: { text: {} } },
   { name: "entity", selector: { entity: { domain: ["automation", "script", "scene"] } } },
-  { name: "image", selector: { image: {} } },
+  { name: "image", selector: { text: {} } },
   { name: "icon", selector: { icon: {} } },
 ];
 
@@ -4352,6 +4365,7 @@ class WabitMediaCardEditor extends HTMLElement {
     const list = this._els.list;
     list.innerHTML = "";
     this._presetForms = [];
+    this._presetThumbs = [];
 
     if (!presets.length) {
       const empty = document.createElement("div");
@@ -4367,6 +4381,8 @@ class WabitMediaCardEditor extends HTMLElement {
 
       const head = document.createElement("div");
       head.className = "head";
+      const thumb = document.createElement("div");
+      thumb.className = "preset-thumb";
       const heading = document.createElement("span");
       heading.textContent = (p && p.name) || `Preset ${i + 1}`;
 
@@ -4382,6 +4398,7 @@ class WabitMediaCardEditor extends HTMLElement {
         return b;
       };
       head.append(
+        thumb,
         heading,
         mkBtn("\u2191", "Move up", i === 0, () => this._movePreset(i, -1)),
         mkBtn("\u2193", "Move down", i === presets.length - 1, () => this._movePreset(i, 1)),
@@ -4403,6 +4420,7 @@ class WabitMediaCardEditor extends HTMLElement {
         });
         block.appendChild(form);
         this._presetForms.push(form);
+        this._presetThumbs.push(thumb);
       }
       list.appendChild(block);
     });
@@ -4423,6 +4441,16 @@ class WabitMediaCardEditor extends HTMLElement {
       };
       form.hass = this._hass;
       if (JSON.stringify(form.data) !== JSON.stringify(data)) form.data = data;
+
+      // Immediate feedback on whether the path resolves, which is the bit a
+      // bare text field otherwise leaves you guessing at.
+      const thumb = this._presetThumbs[i];
+      if (thumb && thumb._src !== (p.image || "")) {
+        thumb._src = p.image || "";
+        thumb.style.backgroundImage = p.image ? `url("${p.image}")` : "";
+        thumb.classList.toggle("empty", !p.image);
+        thumb.title = p.image || "No artwork set";
+      }
     });
   }
 

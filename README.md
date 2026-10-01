@@ -131,9 +131,10 @@ anything else, give a `service` instead with optional `data` and `target`:
 
 `image` is optional; without one the preset shows `icon`, defaulting to `mdi:radio`.
 
-In the visual editor each preset is a block with Home Assistant's own controls — an entity
-picker limited to automations, scripts and scenes, and an image chooser — plus ↑ / ↓ / ✕ to
-reorder and remove. Presets appear in the order listed.
+In the visual editor each preset is a block with an entity picker limited to automations,
+scripts and scenes, an icon picker, and a field for the artwork path, plus ↑ / ↓ / ✕ to
+reorder and remove. A thumbnail beside each preset shows what the artwork path resolves
+to, so a typo is obvious straight away. Presets appear in the order listed.
 
 The preset matching what is playing is highlighted. By default the card looks for the
 preset's `name` in the current title or subtitle, so "6 Music" lights up while "Radio 6
