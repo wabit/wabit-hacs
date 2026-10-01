@@ -59,6 +59,7 @@ it over.
 | `title` | string | the room name | Card header. |
 | `idle_text` | string | `Nothing playing` | Shown when nothing in the room is active. |
 | `show_volume` | boolean | `true` | Volume slider and mute. |
+| `show_power` | boolean | `true` | Power button, for players that can be switched. |
 | `show_progress` | boolean | `true` | Progress bar and times. |
 | `show_others` | boolean | `true` | The room's other players underneath. |
 | `show_header` | boolean | `true` | The room name. |
@@ -130,6 +131,10 @@ anything else, give a `service` instead with optional `data` and `target`:
 
 `image` is optional; without one the preset shows `icon`, defaulting to `mdi:radio`.
 
+In the visual editor each preset is a block with Home Assistant's own controls — an entity
+picker limited to automations, scripts and scenes, and an image chooser — plus ↑ / ↓ / ✕ to
+reorder and remove. Presets appear in the order listed.
+
 The preset matching what is playing is highlighted. By default the card looks for the
 preset's `name` in the current title or subtitle, so "6 Music" lights up while "Radio 6
 Music" is on — including when it is paused, since the station is still the loaded one.
@@ -149,7 +154,10 @@ current one stops — the card goes back to following the room. So picking the t
 check on it does not leave you stuck there once music starts.
 
 Transport buttons follow each player's own `supported_features`, so a streamer that
-cannot skip tracks shows those buttons greyed rather than pretending. Progress is
+cannot skip tracks shows those buttons greyed rather than pretending. A player that can be
+switched on and off gets a power button at the end of the row — mostly useful for a
+television, which has little else worth a control. Players that are off are not featured
+on their own, so to switch one back on, tap it in the list first. Progress is
 recomputed from `media_position` and the timestamp Home Assistant reports it against, so
 the bar keeps moving between state updates instead of jumping.
 

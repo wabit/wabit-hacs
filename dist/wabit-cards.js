@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.12.0";
+const VERSION = "1.13.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -3514,6 +3514,9 @@ const MEDIA_STYLES = `
   .btn.primary:hover:not(:disabled) { background: var(--wc-accent-tonal); filter: brightness(1.06); }
   .btn .icon { color: inherit; --mdc-icon-size: 22px; }
   .btn.primary .icon { --mdc-icon-size: 26px; }
+  .btn.power { margin-left: 4px; }
+  .btn.power.lit { color: var(--wc-accent); }
+  .stage.cover .btn.power.lit { color: #fff; }
   .spacer { flex: 1; }
   .vol { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 1 150px; }
   .vol.hidden { display: none; }
@@ -3631,6 +3634,7 @@ class WabitMediaCard extends HTMLElement {
       show_progress: cfg.show_progress !== false,
       show_others: cfg.show_others !== false,
       idle_text: cfg.idle_text || "Nothing playing",
+      show_power: cfg.show_power !== false,
       // cover: the artwork is the panel, text and controls over it.
       // tile:   a thumbnail beside the text, with a blurred colour wash.
       // none:   no artwork at all.
@@ -3910,6 +3914,16 @@ class WabitMediaCard extends HTMLElement {
     this._setIcon(e.playIcon, playing ? "mdi:pause" : "mdi:play");
     e.play.setAttribute("aria-label", playing ? "Pause" : "Play");
 
+    const canPower = can(st, MF.TURN_OFF) || can(st, MF.TURN_ON);
+    const showPower = this._config.show_power && canPower;
+    e.power.style.display = showPower ? "" : "none";
+    if (showPower) {
+      const isOff = st.state === "off";
+      e.power.setAttribute("aria-label", isOff ? "Turn on" : "Turn off");
+      e.power.title = isOff ? "Turn on" : "Turn off";
+      e.power.classList.toggle("lit", !isOff);
+    }
+
     const showVol = this._config.show_volume && can(st, MF.VOLUME_SET);
     e.vol.classList.toggle("hidden", !showVol);
     if (showVol) {
@@ -4145,6 +4159,14 @@ class WabitMediaCard extends HTMLElement {
     const next = mkBtn("mdi:skip-next", "Next", "", () => this._call("media_next_track"));
     const spacer = document.createElement("div");
     spacer.className = "spacer";
+    const power = mkBtn("mdi:power", "Power", "power", () => {
+      const f = this._lastModel && this._lastModel.featured;
+      if (!f) return;
+      // Off means on; anything else means off. A telly is usually the reason
+      // this button exists, and off is what you want from it.
+      this._call(f.st.state === "off" ? "turn_on" : "turn_off");
+    });
+
     const vol = document.createElement("div");
     vol.className = "vol";
     const mute = mkBtn("mdi:volume-high", "Mute", "", () => {
@@ -4162,7 +4184,7 @@ class WabitMediaCard extends HTMLElement {
       this._call("volume_set", { volume_level: Number(volume.value) / 100 })
     );
     vol.append(mute.b, volume);
-    controls.append(prev.b, play.b, next.b, spacer, vol);
+    controls.append(prev.b, play.b, next.b, spacer, vol, power.b);
     stageBody.appendChild(controls);
 
     const presets = document.createElement("div");
@@ -4178,6 +4200,7 @@ class WabitMediaCard extends HTMLElement {
       progress, fill, elapsed, total,
       controls, prev: prev.b, play: play.b, playIcon: play.ic, next: next.b,
       vol, mute: mute.b, muteIcon: mute.ic, volume,
+      power: power.b, powerIcon: power.ic,
       presets, presetEls: null, others, otherRows: [],
     });
     this._built = true;
@@ -4197,6 +4220,20 @@ const MEDIA_LABELS = {
   show_others: "List the room's other players underneath",
   idle_text: "Text when nothing is playing",
 };
+
+const PRESET_LABELS = {
+  name: "Name",
+  entity: "Automation, script or scene to run",
+  image: "Artwork",
+  icon: "Icon (used when there is no artwork)",
+};
+
+const PRESET_SCHEMA = [
+  { name: "name", selector: { text: {} } },
+  { name: "entity", selector: { entity: { domain: ["automation", "script", "scene"] } } },
+  { name: "image", selector: { image: {} } },
+  { name: "icon", selector: { icon: {} } },
+];
 
 const MEDIA_SCHEMA = [
   { name: "area", selector: { area: {} } },
@@ -4220,6 +4257,7 @@ class WabitMediaCardEditor extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    this._pushPresetForms();
     this._push();
   }
 
@@ -4288,13 +4326,14 @@ class WabitMediaCardEditor extends HTMLElement {
     return Array.isArray(this._config.presets) ? this._config.presets : [];
   }
 
-  _setPresets(list) {
+  _setPresets(list, keepRows) {
     const next = { ...this._config };
     if (list.length) next.presets = list;
     else delete next.presets;
     this._config = next;
     fireEvent(this, "config-changed", { config: this._config });
-    this._renderPresets(true);
+    if (keepRows) this._pushPresetForms();
+    else this._renderPresets(true);
   }
 
   _addPreset() {
@@ -4304,49 +4343,95 @@ class WabitMediaCardEditor extends HTMLElement {
   _renderPresets(force) {
     if (!this._built || !this._els) return;
     const presets = this._presets();
-    // Rebuilding while someone is typing would steal focus, so only when the
-    // number of rows actually changes.
-    if (!force && this._presetCount === presets.length) return;
-    this._presetCount = presets.length;
+    // ha-form owns its own fields, so rows only need rebuilding when the list
+    // itself changes - not on every keystroke.
+    const key = JSON.stringify(presets.map((p) => p && p.name));
+    if (!force && key === this._presetKey) return;
+    this._presetKey = key;
 
     const list = this._els.list;
     list.innerHTML = "";
+    this._presetForms = [];
+
+    if (!presets.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty-pins";
+      empty.textContent =
+        "No presets yet. Add one to put a radio station, scene or script a tap away.";
+      list.appendChild(empty);
+    }
+
     presets.forEach((p, i) => {
-      const row = document.createElement("div");
-      row.className = "preset-row";
+      const block = document.createElement("div");
+      block.className = "block";
 
-      const mkField = (key, placeholder, width) => {
-        const input = document.createElement("input");
-        input.type = "text";
-        input.placeholder = placeholder;
-        input.value = p[key] === undefined || p[key] === null ? "" : String(p[key]);
-        if (width) input.style.flex = width;
-        input.addEventListener("change", () => {
-          const next = this._presets().slice();
-          next[i] = { ...next[i], [key]: input.value };
-          this._setPresets(next);
-        });
-        return input;
+      const head = document.createElement("div");
+      head.className = "head";
+      const heading = document.createElement("span");
+      heading.textContent = (p && p.name) || `Preset ${i + 1}`;
+
+      const mkBtn = (glyph, label, disabled, fn, danger) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = danger ? "pin-btn danger" : "pin-btn";
+        b.textContent = glyph;
+        b.title = label;
+        b.setAttribute("aria-label", `${label}: ${heading.textContent}`);
+        b.disabled = !!disabled;
+        b.addEventListener("click", fn);
+        return b;
       };
-
-      const del = document.createElement("button");
-      del.type = "button";
-      del.className = "pin-btn danger";
-      del.textContent = "\u2715";
-      del.title = "Remove";
-      del.setAttribute("aria-label", "Remove preset");
-      del.addEventListener("click", () =>
-        this._setPresets(this._presets().filter((_, j) => j !== i))
+      head.append(
+        heading,
+        mkBtn("\u2191", "Move up", i === 0, () => this._movePreset(i, -1)),
+        mkBtn("\u2193", "Move down", i === presets.length - 1, () => this._movePreset(i, 1)),
+        mkBtn("\u2715", "Remove", false, () =>
+          this._setPresets(this._presets().filter((_, j) => j !== i)), true)
       );
+      block.appendChild(head);
 
-      row.append(
-        mkField("name", "Name", "1 1 90px"),
-        mkField("entity", "automation.play_something", "2 1 160px"),
-        mkField("image", "/local/art.png", "1 1 110px"),
-        del
-      );
-      list.appendChild(row);
+      if (customElements.get("ha-form")) {
+        const form = document.createElement("ha-form");
+        form.schema = PRESET_SCHEMA;
+        form.computeLabel = (sc) => PRESET_LABELS[sc.name] || sc.name;
+        form.addEventListener("value-changed", (ev) => {
+          ev.stopPropagation();
+          const next = this._presets().slice();
+          next[i] = { ...next[i], ...ev.detail.value };
+          heading.textContent = next[i].name || `Preset ${i + 1}`;
+          this._setPresets(next, true);
+        });
+        block.appendChild(form);
+        this._presetForms.push(form);
+      }
+      list.appendChild(block);
     });
+
+    this._pushPresetForms();
+  }
+
+  _pushPresetForms() {
+    if (!this._presetForms || !this._hass) return;
+    const presets = this._presets();
+    this._presetForms.forEach((form, i) => {
+      const p = presets[i] || {};
+      const data = {
+        name: p.name,
+        entity: p.entity,
+        image: p.image,
+        icon: p.icon,
+      };
+      form.hass = this._hass;
+      if (JSON.stringify(form.data) !== JSON.stringify(data)) form.data = data;
+    });
+  }
+
+  _movePreset(index, delta) {
+    const list = this._presets().slice();
+    const to = index + delta;
+    if (to < 0 || to >= list.length) return;
+    [list[index], list[to]] = [list[to], list[index]];
+    this._setPresets(list);
   }
 
   _push() {

@@ -465,6 +465,59 @@ eq("a tv gets a television icon",
 delete customElements._d["ha-icon"];
 
 
+
+/* ------------------------------------------------------------ power ---
+   A telly is usually what this is for: no transport worth speaking of, but
+   you want to be able to switch it off from the card. */
+const TV_FEATURES = 128 | 256 | 4;   // on, off, volume - no transport
+// The Sonos is idle here: a paused speaker outranks an on telly, which is a
+// separate question from whether the power button works.
+const tvHass = { ...hass, states: { ...hass.states,
+  "media_player.fireplace": { ...hass.states["media_player.fireplace"], state: "idle" },
+  "media_player.living_room_tv": { state: "on", last_changed: iso(10), attributes: {
+    friendly_name: "Living room tv", device_class: "tv",
+    supported_features: TV_FEATURES, media_title: "HDMI 2", volume_level: 0.3 } } } };
+const tv = new T.WabitMediaCard();
+tv.setConfig({ area: "living_room" });
+tv.hass = tvHass;
+
+eq("the on telly is featured", tv._lastModel.featured.id, "media_player.living_room_tv");
+eq("power shown when supported", tv._els.power.style.display, "");
+eq("power is marked while on", tv._els.power.classList.contains("lit"), true);
+eq("power says turn off", tv._els.power.title, "Turn off");
+eq("no transport, so those are disabled", tv._els.next.disabled, true);
+
+tv._els.power._fire("click");
+eq("power turns it off", calls.at(-1).slice(0, 3),
+   ["media_player", "turn_off", { entity_id: "media_player.living_room_tv" }]);
+
+// Switched off, nothing in the room is active, so the card features nothing by
+// itself - you tap the telly in the list to get at it. That is the real flow
+// for turning something back on.
+const offTv = { ...tvHass, states: { ...tvHass.states,
+  "media_player.living_room_tv": { ...tvHass.states["media_player.living_room_tv"],
+    state: "off" } } };
+tv.hass = offTv;
+eq("a quiet room features nothing on its own", tv._lastModel.featured, null);
+eq("the idle line explains it", tv._els.idle.textContent, "Nothing playing");
+
+tv._els.otherRows.find((r) => r.id === "media_player.living_room_tv").row._fire("click");
+eq("tapping an off player features it",
+   tv._lastModel.featured.id, "media_player.living_room_tv");
+eq("power says turn on when off", tv._els.power.title, "Turn on");
+eq("power unmarked when off", tv._els.power.classList.contains("lit"), false);
+tv._els.power._fire("click");
+eq("power turns it on", calls.at(-1).slice(0, 3),
+   ["media_player", "turn_on", { entity_id: "media_player.living_room_tv" }]);
+
+// A player that cannot be switched does not get the button.
+const noPower = mk({ entities: ["media_player.office_atv"] });
+eq("power hidden when unsupported", noPower._els.power.style.display, "none");
+const hiddenPower = new T.WabitMediaCard();
+hiddenPower.setConfig({ area: "living_room", show_power: false });
+hiddenPower.hass = tvHass;
+eq("power can be turned off in config", hiddenPower._els.power.style.display, "none");
+
 /* -------------------------------------------------------- presets editor */
 customElements.define("ha-form", class {});
 const ed = new T.WabitMediaCardEditor();
@@ -473,28 +526,53 @@ ed.addEventListener("config-changed", (ev) => emitted.push(ev.detail.config));
 ed.setConfig({ area: "living_room", presets: PRESETS });
 ed.hass = hass;
 
-eq("a row per preset", ed._els.list.children.length, 2);
-eq("name field filled", ed._els.list.children[0].children[0].value, "6 Music");
-eq("entity field filled", ed._els.list.children[0].children[1].value,
-   "automation.living_room_play_6_music");
-eq("image field filled", ed._els.list.children[0].children[2].value, "/local/6-music.png");
+const blocks = () => ed._els.list.children.filter((c) => c.classList.contains("block"));
+eq("a block per preset", blocks().length, 2);
+eq("heading uses the name", blocks()[0].children[0].children[0].textContent, "6 Music");
+eq("each block has a form", ed._presetForms.length, 2);
+// Real HA controls rather than bare text boxes: an entity picker and an image chooser.
+eq("form fields", ed._presetForms[0].schema.map((f) => f.name),
+   ["name", "entity", "image", "icon"]);
+eq("entity field is a picker over runnable things",
+   ed._presetForms[0].schema[1].selector.entity.domain,
+   ["automation", "script", "scene"]);
+eq("image field is an image selector",
+   Object.keys(ed._presetForms[0].schema[2].selector)[0], "image");
+eq("form carries the preset", ed._presetForms[0].data,
+   { name: "6 Music", entity: "automation.living_room_play_6_music",
+     image: "/local/6-music.png", icon: undefined });
 
-ed._els.list.children[0].children[0].value = "BBC 6 Music";
-ed._els.list.children[0].children[0]._fire("change");
-eq("editing a field emits", emitted.at(-1).presets[0].name, "BBC 6 Music");
-eq("editing one field keeps the others",
-   emitted.at(-1).presets[0].entity, "automation.living_room_play_6_music");
+// Editing through the form merges rather than replacing.
+ed._presetForms[0]._handlers["value-changed"][0]({
+  stopPropagation() {}, detail: { value: { name: "BBC 6 Music" } } });
+eq("editing emits", emitted.at(-1).presets[0].name, "BBC 6 Music");
+eq("editing keeps the rest", emitted.at(-1).presets[0].entity,
+   "automation.living_room_play_6_music");
 eq("other presets untouched", emitted.at(-1).presets[1].name, "Def Con Radio");
+eq("heading follows the name", blocks()[0].children[0].children[0].textContent, "BBC 6 Music");
+// Editing a field must not tear the rows down underneath the cursor.
+eq("rows are not rebuilt while editing", ed._presetForms.length, 2);
+
+/* presets are ordered, so they can be reordered */
+eq("first cannot move up", blocks()[0].children[0].children[1].disabled, true);
+eq("last cannot move down", blocks()[1].children[0].children[2].disabled, true);
+blocks()[0].children[0].children[2]._fire("click");
+eq("move down reorders", emitted.at(-1).presets.map((p) => p.name),
+   ["Def Con Radio", "BBC 6 Music"]);
+blocks()[1].children[0].children[1]._fire("click");
+eq("move up reorders back", emitted.at(-1).presets.map((p) => p.name),
+   ["BBC 6 Music", "Def Con Radio"]);
 
 ed._addPreset();
-eq("adding appends a blank row", emitted.at(-1).presets.length, 3);
-eq("three rows now", ed._els.list.children.length, 3);
-
-ed._els.list.children[2].children[3]._fire("click");
+eq("adding appends", emitted.at(-1).presets.length, 3);
+eq("three blocks now", blocks().length, 3);
+blocks()[2].children[0].children[3]._fire("click");
 eq("removing drops it", emitted.at(-1).presets.length, 2);
-ed._els.list.children[1].children[3]._fire("click");
-ed._els.list.children[0].children[3]._fire("click");
+blocks()[1].children[0].children[3]._fire("click");
+blocks()[0].children[0].children[3]._fire("click");
 eq("emptying removes the key", "presets" in emitted.at(-1), false);
+eq("empty state explained",
+   ed._els.list.children[0].classList.contains("empty-pins"), true);
 delete customElements._d["ha-form"];
 
 globalThis.Date = RealDate;
