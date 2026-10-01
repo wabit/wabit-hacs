@@ -64,7 +64,7 @@ Readings are grouped the way they are worth reading:
 
 | Graph | Width | Why |
 | --- | --- | --- |
-| Temperature + Humidity | full | One chart, but each line on its own scale: degrees and a percentage cannot share an axis without squashing one of them flat. The legend and the hover readout carry the real numbers. |
+| Temperature + Humidity | full | One chart with an axis each - temperature down the left, humidity down the right, both labelled in their line's colour. Degrees and a percentage on one scale would squash whichever has the smaller range into a flat line. |
 | PM1.0 / PM2.5 / PM4.0 / PM10 | full | One chart with four lines on a shared axis starting at zero, so the particle sizes compare honestly - each one only means anything next to the others. |
 | CO₂ | full | The shape over a day is the point of it. |
 | Air pressure | full | Same. |
@@ -115,7 +115,8 @@ colors:
 
 An axis label is dropped where an extremum marker already answers it - either it reads the
 same number, or it would be printed on top of it. A chart whose lines are each on their own
-scale has no axis labels at all, because there is no single axis for them to describe.
+scale gets one axis per line instead, on the left and right, coloured to match; a third line
+on such a chart would be drawn but not given an axis, because there are only two sides.
 
 For graphs that sit straight on the card with no panel behind them:
 

@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.18.0";
+const VERSION = "1.19.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -5264,7 +5264,7 @@ const AIR_CHARTS = [
   {
     key: "climate", title: "Temperature & humidity", icon: "mdi:thermometer",
     metrics: ["temperature", "humidity"],
-    width: "full", legend: true, independent: true, line_width: 2,
+    width: "full", legend: true, independent: true, labels: true, line_width: 2,
   },
   {
     key: "pm", title: "Particulate matter", icon: "mdi:blur",
@@ -5617,6 +5617,10 @@ const AIR_STYLES = `
   .axis.hidden { display: none; }
   .axis.max { top: -2px; }
   .axis.min { bottom: -2px; }
+  /* Two readings in different units get an axis each, coloured to its line so
+     there is no guessing which side belongs to which. */
+  .axis.side { color: var(--series); font-weight: 600; }
+  .axis.right { left: auto; right: 0; padding-right: 0; padding-left: 3px; }
   .ext {
     position: absolute; transform: translate(-50%, -50%);
     font-size: 0.62rem; color: var(--wc-muted); font-variant-numeric: tabular-nums;
@@ -5929,6 +5933,23 @@ class WabitAirCard extends HTMLElement {
     extMax.style.setProperty("--series", spec.series[0].color);
     extMin.style.setProperty("--series", spec.series[0].color);
 
+    // Only the first two lines can have an axis: there are two sides.
+    const sideAxes = [];
+    if (spec.independent) {
+      series.slice(0, 2).forEach((s, i) => {
+        const side = i === 0 ? "left" : "right";
+        const pair = ["max", "min"].map((end) => {
+          const el = document.createElement("div");
+          el.className = `axis side ${end} ${side} hidden`;
+          el.style.setProperty("--series", s.metric.color);
+          sideAxes.push(el);
+          return el;
+        });
+        s.axisMax = pair[0];
+        s.axisMin = pair[1];
+      });
+    }
+
     const cross = document.createElement("div");
     cross.className = "cross";
 
@@ -5955,7 +5976,7 @@ class WabitAirCard extends HTMLElement {
 
     const hit = document.createElement("div");
     hit.className = "hit";
-    plot.append(axisMax, axisMin, extMax, extMin, cross, tip, hit);
+    plot.append(axisMax, axisMin, ...sideAxes, extMax, extMin, cross, tip, hit);
 
     const legend = document.createElement("div");
     legend.className = "legend hidden";
@@ -6127,6 +6148,19 @@ class WabitAirCard extends HTMLElement {
     }
 
     const showAxis = cfg.show_labels && spec.labels && drawable && !!bounds;
+    // Each line on its own scale means each gets its own axis, left then right.
+    const sideAxes = cfg.show_labels && spec.labels && spec.independent && drawable;
+    h.series.forEach((s) => {
+      if (!s.axisMax) return;
+      const on = sideAxes && !!s.bounds;
+      s.axisMax.classList.toggle("hidden", !on);
+      s.axisMin.classList.toggle("hidden", !on);
+      if (!on) return;
+      s.axisMax.textContent = this._format(s.metric, s.bounds.max);
+      s.axisMin.textContent = this._format(s.metric, s.bounds.min);
+      s.axisMax.style.setProperty("--series", s.metric.color);
+      s.axisMin.style.setProperty("--series", s.metric.color);
+    });
     h.axisMax.classList.toggle("hidden", !showAxis);
     h.axisMin.classList.toggle("hidden", !showAxis);
     if (showAxis) {

@@ -321,8 +321,24 @@ const liveClimate = chartOf(live, "climate");
 eq("each line gets its own scale",
    liveClimate.series.map((s) => s.bounds), [{ min: 20, max: 31 }, { min: 60, max: 71 }]);
 eq("so the chart has no single axis", liveClimate.bounds, null);
-eq("and no axis labels to mislead",
+eq("and no shared axis label to mislead",
    liveClimate.axisMax.classList.contains("hidden"), true);
+// Instead each line gets a side of its own: temperature left, humidity right.
+eq("temperature is read down the left",
+   liveClimate.series[0].axisMax.className.includes("left"), true);
+eq("humidity down the right",
+   liveClimate.series[1].axisMax.className.includes("right"), true);
+eq("both axes are shown",
+   liveClimate.series.map((s) => s.axisMax.classList.contains("hidden")), [false, false]);
+eq("labelled with their own range",
+   liveClimate.series.map((s) => [s.axisMin.textContent, s.axisMax.textContent]),
+   [["20.0", "31.0"], ["60.0", "71.0"]]);
+eq("and coloured to their line",
+   liveClimate.series.map((s) => s.axisMax.style.getPropertyValue("--series")),
+   ["#e53935", "#1e88e5"]);
+eq("turning labels off takes both",
+   mk({ area: "office", show_labels: false })._els.chartEls[0]
+     .series.every((s) => s.axisMax.classList.contains("hidden")), true);
 eq("both lines reach the top of the box",
    liveClimate.series.map((s) => s.line.getAttribute("d").includes(",0.00")), [true, true]);
 eq("and the bottom",
