@@ -249,6 +249,76 @@ eq("listed in the picker",
 
 
 
+
+/* ------------------------------- the card follows whatever starts playing --
+   A room normally has one thing playing at a time. A manual pick holds while
+   the room carries on as it was, but hands back as soon as playback moves. */
+const follow = new T.WabitMediaCard();
+follow.setConfig({ area: "living_room" });
+follow.hass = hass;                       // fireplace paused, everything else off
+eq("starts on the paused Sonos", follow._lastModel.featured.id, "media_player.fireplace");
+
+// Pick the telly by hand.
+follow._els.otherRows.find((r) => r.id === "media_player.living_room_tv").row._fire("click");
+eq("manual pick takes over", follow._lastModel.featured.id, "media_player.living_room_tv");
+
+// An unrelated update must not disturb it: nothing started or stopped.
+follow.hass = { ...hass, states: { ...hass.states,
+  "media_player.fireplace": { ...hass.states["media_player.fireplace"],
+    attributes: { ...hass.states["media_player.fireplace"].attributes, volume_level: 0.4 } } } };
+eq("manual pick holds while nothing changes hands",
+   follow._lastModel.featured.id, "media_player.living_room_tv");
+
+// Now the Sonos actually starts. The room has changed hands.
+const sonosOn = { ...hass, states: { ...hass.states,
+  "media_player.fireplace": { ...hass.states["media_player.fireplace"], state: "playing" } } };
+follow.hass = sonosOn;
+eq("playback wins over the manual pick",
+   follow._lastModel.featured.id, "media_player.fireplace");
+eq("the manual pick is forgotten", follow._selected, null);
+
+// The Apple TV takes over from the Sonos.
+const atvOn = { ...hass, states: { ...hass.states,
+  "media_player.fireplace": { ...hass.states["media_player.fireplace"], state: "idle" },
+  "media_player.living_room_apple_tv": { ...hass.states["media_player.living_room_apple_tv"],
+    state: "playing", last_changed: iso(1),
+    attributes: { ...hass.states["media_player.living_room_apple_tv"].attributes,
+                  media_title: "The Bear" } } } };
+follow.hass = atvOn;
+eq("follows the handover", follow._lastModel.featured.id, "media_player.living_room_apple_tv");
+
+// And when it stops, it falls back rather than sticking on a dead player.
+follow.hass = hass;
+eq("falls back when playback stops", follow._lastModel.featured.id, "media_player.fireplace");
+
+/* Two at once - rare, and normally mid-handover - goes to the newer one. */
+const bothOn = { ...hass, states: { ...hass.states,
+  "media_player.fireplace": { ...hass.states["media_player.fireplace"],
+    state: "playing", last_changed: iso(300) },
+  "media_player.living_room_apple_tv": { ...hass.states["media_player.living_room_apple_tv"],
+    state: "playing", last_changed: iso(5),
+    attributes: { ...hass.states["media_player.living_room_apple_tv"].attributes,
+                  media_title: "The Bear" } } } };
+const both = new T.WabitMediaCard();
+both.setConfig({ area: "living_room" });
+both.hass = bothOn;
+eq("the newer of two playing wins",
+   both._lastModel.featured.id, "media_player.living_room_apple_tv");
+eq("the older is still listed as playing",
+   both._els.otherRows.find((r) => r.id === "media_player.fireplace").row
+     .classList.contains("live"), true);
+
+/* ----------------------------------------------------------- artwork wash */
+// A fresh card: `lr` has been tapped around by the interaction tests above.
+const washed = mk({ area: "living_room" });
+eq("wash on when there is artwork", washed._els.stage.classList.contains("washed"), true);
+eq("wash carries the image",
+   washed._els.stage.style._props["--art"].includes("media_player_proxy"), true);
+const noWash = mk({ area: "living_room", art_backdrop: false });
+eq("wash can be turned off", noWash._els.stage.classList.contains("washed"), false);
+const noArt = mk({ area: "office" });
+eq("no wash without artwork", noArt._els.stage.classList.contains("washed"), false);
+
 /* ---------------------------------------------------------- presets ---
    One-tap shortcuts, matching the radio-station buttons that used to sit
    under the player as a horizontal-stack of button-cards. */

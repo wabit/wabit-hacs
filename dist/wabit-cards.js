@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.9.0";
+const VERSION = "1.10.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -3369,23 +3369,40 @@ const MEDIA_STYLES = `
   .body.tight { padding-top: 4px; }
 
   /* ------------------------------------------------------------- now playing */
-  .now { display: flex; gap: 14px; align-items: flex-start; }
+  .stage { position: relative; }
+  /* The artwork, blurred and heavily scrimmed, washes the panel in the album's
+     own colour without putting text on top of arbitrary imagery. */
+  .wash {
+    position: absolute; inset: -20px -20px -8px; z-index: 0; pointer-events: none;
+    background: var(--art) center/cover no-repeat;
+    filter: blur(28px) saturate(1.35);
+    opacity: 0; transition: opacity 500ms ease;
+    /* Faded at both ends: a hard top edge reads as a band across the card. */
+    -webkit-mask-image: linear-gradient(180deg,
+      transparent 0%, #000 22%, #000 58%, transparent 100%);
+    mask-image: linear-gradient(180deg,
+      transparent 0%, #000 22%, #000 58%, transparent 100%);
+  }
+  .stage.washed .wash { opacity: 0.3; }
+  .now { position: relative; z-index: 1; display: flex; gap: 16px; align-items: flex-start; }
   .now.hidden { display: none; }
   .art {
-    width: 76px; height: 76px; border-radius: 12px; flex: none;
+    width: 104px; height: 104px; border-radius: 14px; flex: none;
     background: var(--wc-tonal) center/cover no-repeat;
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.16);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.26);
   }
-  .art .icon { color: var(--wc-muted); --mdc-icon-size: 30px; }
+  .art .icon { color: var(--wc-muted); --mdc-icon-size: 38px; }
   .art.has-art .icon { display: none; }
-  .meta { flex: 1; min-width: 0; padding-top: 2px; }
+  .meta { flex: 1; min-width: 0; padding-top: 4px; }
+  @media (prefers-reduced-motion: reduce) { .wash { transition: none; } }
   .eyebrow {
     font-size: 0.68rem; letter-spacing: 0.09em; text-transform: uppercase;
     color: var(--wc-muted); font-weight: 600;
   }
   .track {
-    color: var(--wc-text); font-size: 1.12rem; line-height: 1.3; margin-top: 3px;
+    color: var(--wc-text); font-size: 1.25rem; line-height: 1.28; margin-top: 4px;
+    font-weight: 500;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .sub {
@@ -3546,12 +3563,14 @@ class WabitMediaCard extends HTMLElement {
       show_progress: cfg.show_progress !== false,
       show_others: cfg.show_others !== false,
       idle_text: cfg.idle_text || "Nothing playing",
+      art_backdrop: cfg.art_backdrop !== false,
       presets: this._readPresets(cfg.presets),
     };
 
     this._built = false;
     this._othersKey = null;
     this._selected = null;
+    this._playingKey = null;
     if (this.shadowRoot) this.shadowRoot.innerHTML = "";
     if (this._hass) this._render();
   }
@@ -3649,7 +3668,19 @@ class WabitMediaCard extends HTMLElement {
           a.id.localeCompare(b.id)
       );
 
-    // A player the user picked wins, as long as it is still around.
+    // A room normally has one thing playing. When that changes hands - something
+    // starts, or the current one stops - the card follows it, dropping any
+    // manual pick. A manual pick only holds while the room carries on as it was.
+    const playingKey = players
+      .filter((p) => p.st.state === "playing" || p.st.state === "buffering")
+      .map((p) => p.id)
+      .sort()
+      .join("|");
+    if (playingKey !== this._playingKey) {
+      this._playingKey = playingKey;
+      this._selected = null;
+    }
+
     let featured = players.find((p) => p.id === this._selected) || null;
     if (!featured) featured = players.find((p) => p.rank >= 3) || null;
 
@@ -3753,6 +3784,9 @@ class WabitMediaCard extends HTMLElement {
       e.art._art = art;
       e.art.style.backgroundImage = art ? `url("${art}")` : "";
       e.art.classList.toggle("has-art", !!art);
+      const wash = art && this._config.art_backdrop;
+      e.stage.style.setProperty("--art", art ? `url("${art}")` : "none");
+      e.stage.classList.toggle("washed", !!wash);
     }
 
     const stateWord =
@@ -3964,6 +3998,11 @@ class WabitMediaCard extends HTMLElement {
     body.append(error, idle);
 
     // now playing
+    const stage = document.createElement("div");
+    stage.className = "stage";
+    const wash = document.createElement("div");
+    wash.className = "wash";
+    stage.appendChild(wash);
     const now = document.createElement("div");
     now.className = "now";
     const art = document.createElement("div");
@@ -3981,7 +4020,8 @@ class WabitMediaCard extends HTMLElement {
     where.className = "where";
     meta.append(eyebrow, track, sub, where);
     now.append(art, meta);
-    body.appendChild(now);
+    stage.appendChild(now);
+    body.appendChild(stage);
 
     // progress
     const progress = document.createElement("div");
@@ -4046,7 +4086,7 @@ class WabitMediaCard extends HTMLElement {
     body.appendChild(others);
 
     Object.assign(this._els, {
-      error, idle, now, art, eyebrow, track, sub, where,
+      error, idle, stage, now, art, eyebrow, track, sub, where,
       progress, fill, elapsed, total,
       controls, prev: prev.b, play: play.b, playIcon: play.ic, next: next.b,
       vol, mute: mute.b, muteIcon: mute.ic, volume,

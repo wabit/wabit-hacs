@@ -63,6 +63,7 @@ it over.
 | `show_others` | boolean | `true` | The room's other players underneath. |
 | `show_header` | boolean | `true` | The room name. |
 | `presets` | list | – | One-tap shortcuts under the player. See below. |
+| `art_backdrop` | boolean | `true` | Wash the panel in the artwork's colours. |
 
 ### One speaker, several integrations
 
@@ -114,10 +115,16 @@ Set `match` to look for something else, or `match: null` to never highlight it.
 
 ### What gets featured
 
-Players are ranked: playing, then paused, then on-with-media, on, idle, off, and finally
-unavailable. Ties go to whichever changed most recently — if two things are playing, the
-one you just started is the one you meant. Tapping a player in the list overrides that
-until you pick another.
+A room normally has one thing playing, so the card follows it. Players are ranked —
+playing, then paused, then on-with-media, on, idle, off, and finally unavailable — and
+ties go to whichever changed most recently. Two things playing at once is rare and
+usually means a handover is in progress; the newer one wins, and the other stays visible
+in the list, marked as playing.
+
+Tapping a player in the list takes you to it, and that choice holds while the room
+carries on as it was. As soon as playback changes hands — something starts, or the
+current one stops — the card goes back to following the room. So picking the telly to
+check on it does not leave you stuck there once music starts.
 
 Transport buttons follow each player's own `supported_features`, so a streamer that
 cannot skip tracks shows those buttons greyed rather than pretending. Progress is
