@@ -8,7 +8,7 @@ each time.
 
 | Card | What it does |
 | --- | --- |
-| `wabit-air-card` | Air quality in a room: one plain-English verdict, every reading from the room's sensors as a grid, and how each has moved over the last few hours. |
+| `wabit-air-card` | Air quality in a room: one plain-English verdict over graphs of every reading, with the particle sizes sharing a chart and a hover readout on all of them. |
 | `wabit-f1-card` | The next Grand Prix: where, when, the circuit layout, the session times and the weather at the track. |
 | `wabit-media-card` | What is playing in a room, across speakers, TVs and streamers, with the active one brought to the front. |
 | `wabit-bin-collection-card` | Upcoming bin collections, grouped by day so bins that go out together read as one collection. |
@@ -49,11 +49,48 @@ area: office
 Point it at a room and it finds the air sensors there the same way the lights card finds
 lights - through the area, whether that is set on the entity or inherited from its device.
 It leads with a verdict, because a wall of numbers does not answer "is the air alright?",
-and puts the readings underneath with a sparkline each so you can see which way they are
-going.
+and puts a graph of every reading underneath.
 
-One device typically produces eight to ten sensors. This replaces the row of graph cards
+One device typically produces eight to ten sensors. This replaces the stack of graph cards
 they would otherwise need.
+
+### The graphs
+
+Hovering anywhere over a graph reads out every line at that moment, with a crosshair, a
+marker on each line and the time. It works by dragging on a touchscreen too, and a vertical
+swipe still scrolls the page.
+
+Readings are grouped the way they are worth reading:
+
+| Graph | Width | Why |
+| --- | --- | --- |
+| PM1.0 / PM2.5 / PM4.0 / PM10 | full | One chart with four lines. Each particle size only means anything next to the others, and the axis starts at zero so their sizes compare honestly. |
+| CO₂ | full | The shape over a day is the point of it. |
+| Air pressure | full | Same. |
+| Temperature, Humidity | half each | Comfort, not air quality. |
+| VOC, NOx | half each | Pinned to the 0-500 the index is defined on. |
+
+Anything discovered that no graph claims gets its own half-width one, so nothing is
+silently dropped.
+
+Each line keeps its own colour, because on a four-line chart the colour *is* the label:
+
+| Reading | Colour | | Reading | Colour |
+| --- | --- | --- | --- | --- |
+| PM1.0 | `#00bcd4` | | CO₂ | `#9c27b0` |
+| PM2.5 | `#4caf50` | | Pressure | `#2196f3` |
+| PM4.0 | `#ff9800` | | Temperature | `#e53935` |
+| PM10 | `#f44336` | | Humidity | `#1e88e5` |
+| | | | VOC / NOx | `--accent-color` |
+
+Override any of them with `colors`, keyed by reading:
+
+```yaml
+type: custom:wabit-air-card
+area: office
+colors:
+  co2: "#7e57c2"
+```
 
 ### Options
 
@@ -62,13 +99,21 @@ they would otherwise need.
 | `type` | string | **required** | `custom:wabit-air-card` |
 | `area` | string | **required*** | Area id, name or alias. *Not required if `entities` is given. |
 | `entities` | list | - | Specific sensors, skipping discovery entirely. |
-| `metrics` | list | all that are found | Which readings to show, in this order. See below. |
+| `metrics` | list | all that are found | Which readings to show. See below. |
+| `colors` | map | see above | Line colour per reading. |
 | `title` | string | the room name | Card header. |
 | `show_header` | boolean | `true` | The header. |
 | `show_verdict` | boolean | `true` | The verdict line. |
-| `show_sparklines` | boolean | `true` | The trend under each reading. |
-| `hours` | number | `12` | How far back the sparklines reach. Clamped to 1-168. |
+| `show_graphs` | boolean | `true` | The graphs. Readings alone if off. |
+| `show_legend` | boolean | `true` | The key under a shared graph. |
+| `show_labels` | boolean | `true` | The axis range. |
+| `show_extrema` | boolean | `true` | Markers on the highest and lowest points. |
+| `hours` | number | `12` | How far back the graphs reach. Clamped to 1-168. |
+| `points_per_hour` | number | `6` | Graph resolution. Clamped to 1-60. |
 | `thresholds` | map | see below | Override where a reading stops being good. |
+
+An axis label is dropped where an extremum marker already answers it - either it reads the
+same number, or it would be printed on top of it.
 
 ### Readings
 
@@ -76,6 +121,10 @@ they would otherwise need.
 
 Sensors are matched on `device_class` first. Where that is not enough they are matched on
 the name too: VOC and NOx indexes are both `aqi`, and PM1 must not swallow PM10.
+
+History is averaged into `hours * points_per_hour` buckets. A sensor only reports when it
+changes, so a bucket with no sample is not a gap - it carries the previous reading forward.
+Only the stretch before the first reading is left blank.
 
 ### The verdict
 

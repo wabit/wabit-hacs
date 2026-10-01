@@ -6,7 +6,7 @@
     font-family: Roboto, -apple-system, "Segoe UI", sans-serif;
     background: #f2eef6;
   }
-  .pane { width: 440px; }
+  .pane { width: 460px; }
   .pane.dark { background: #141218; padding: 16px; border-radius: 20px; }
   .pane.light { background: #fef7ff; padding: 16px; border-radius: 20px; }
   .caption { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
@@ -77,6 +77,8 @@ const ICONS = {
     "M15 13V5A3 3 0 0 0 9 5V13A5 5 0 1 0 15 13M12 4A1 1 0 0 1 13 5V8H11V5A1 1 0 0 1 12 4Z",
   "mdi:water-percent":
     "M12,3.25C12,3.25 6,10 6,14C6,17.32 8.69,20 12,20A6,6 0 0,0 18,14C18,10 12,3.25 12,3.25M14.47,9.97L15.53,11.03L9.53,17.03L8.47,15.97M9.75,10A1.25,1.25 0 0,1 11,11.25A1.25,1.25 0 0,1 9.75,12.5A1.25,1.25 0 0,1 8.5,11.25A1.25,1.25 0 0,1 9.75,10M14.25,14.5A1.25,1.25 0 0,1 15.5,15.75A1.25,1.25 0 0,1 14.25,17A1.25,1.25 0 0,1 13,15.75A1.25,1.25 0 0,1 14.25,14.5Z",
+  "mdi:chemical-weapon":
+    "M11,7.83C9.83,7.42 9,6.3 9,5A3,3 0 0,1 12,2A3,3 0 0,1 15,5C15,6.31 14.16,7.42 13,7.83V10.64C12.68,10.55 12.35,10.5 12,10.5C11.65,10.5 11.32,10.55 11,10.64V7.83M18.3,21.1C17.16,20.45 16.62,19.18 16.84,17.96L14.4,16.55C14.88,16.09 15.24,15.5 15.4,14.82L17.84,16.23C18.78,15.42 20.16,15.26 21.29,15.91C22.73,16.74 23.22,18.57 22.39,20C21.56,21.44 19.73,21.93 18.3,21.1M2.7,15.9C3.83,15.25 5.21,15.42 6.15,16.22L8.6,14.81C8.76,15.5 9.11,16.08 9.6,16.54L7.15,17.95C7.38,19.17 6.83,20.45 5.7,21.1C4.26,21.93 2.43,21.44 1.6,20C0.77,18.57 1.26,16.73 2.7,15.9M14,14A2,2 0 0,1 12,16C10.89,16 10,15.1 10,14A2,2 0 0,1 12,12C13.11,12 14,12.9 14,14M17,14L16.97,14.57L15.5,13.71C15.4,12.64 14.83,11.71 14,11.12V9.41C15.77,10.19 17,11.95 17,14M14.97,18.03C14.14,18.64 13.11,19 12,19C10.89,19 9.86,18.64 9.03,18L10.5,17.17C10.96,17.38 11.47,17.5 12,17.5C12.53,17.5 13.03,17.38 13.5,17.17L14.97,18.03M7.03,14.56L7,14C7,11.95 8.23,10.19 10,9.42V11.13C9.17,11.71 8.6,12.64 8.5,13.7L7.03,14.56Z",
   "mdi:gauge":
     "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12C20,14.4 19,16.5 17.3,18C15.9,16.7 14,16 12,16C10,16 8.2,16.7 6.7,18C5,16.5 4,14.4 4,12A8,8 0 0,1 12,4M14,5.89C13.62,5.9 13.26,6.15 13.1,6.54L11.81,9.77L11.71,10C11,10.13 10.41,10.6 10.14,11.26C9.73,12.29 10.23,13.45 11.26,13.86C12.29,14.27 13.45,13.77 13.86,12.74C14.12,12.08 14,11.32 13.57,10.76L13.67,10.5L14.96,7.29L14.97,7.26C15.17,6.75 14.92,6.17 14.41,5.96C14.28,5.91 14.15,5.89 14,5.89M10,6A1,1 0 0,0 9,7A1,1 0 0,0 10,8A1,1 0 0,0 11,7A1,1 0 0,0 10,6M7,9A1,1 0 0,0 6,10A1,1 0 0,0 7,11A1,1 0 0,0 8,10A1,1 0 0,0 7,9M17,9A1,1 0 0,0 16,10A1,1 0 0,0 17,11A1,1 0 0,0 18,10A1,1 0 0,0 17,9Z",
 };
@@ -98,25 +100,30 @@ customElements.define("ha-icon", class extends HTMLElement {
 <script src="../dist/wabit-cards.js"></script>
 
 <script>
-/* A plausible twelve hours of readings, so the sparklines have a real shape. */
-function series(end, swing, n) {
+/* Twelve hours of readings, stamped like the history API returns them. */
+const HOURS = 12;
+const POINTS = HOURS * 6;
+const NOW = Date.now();
+
+function series(end, drift, n) {
   const out = [];
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);
-    out.push({ s: String(end - swing * (1 - t) + swing * 0.4 * Math.sin(t * 6.2)) });
+    const v = end - drift * (1 - t) + drift * 0.4 * Math.sin(t * 6.2 + end);
+    out.push({ s: String(v), lu: (NOW - (1 - t) * HOURS * 3600000) / 1000 });
   }
   return out;
 }
 
 const READINGS = {
   co2: ["carbon_dioxide", "ppm", 0],
-  pm2_5: ["pm25", "µg/m³", 2],
-  pm10: ["pm10", "µg/m³", 2],
-  pm1_0: ["pm1", "µg/m³", 2],
-  pm4_0: ["pm25", "µg/m³", 2],
+  pm2_5: ["pm25", "\u00b5g/m\u00b3", 2],
+  pm10: ["pm10", "\u00b5g/m\u00b3", 2],
+  pm1_0: ["pm1", "\u00b5g/m\u00b3", 2],
+  pm4_0: ["pm25", "\u00b5g/m\u00b3", 2],
   voc_index: ["aqi", "", 0],
   nox_index: ["aqi", "", 0],
-  air_temperature: ["temperature", "°C", 1],
+  air_temperature: ["temperature", "\u00b0C", 1],
   air_humidity: ["humidity", "%", 1],
   air_pressure: ["atmospheric_pressure", "hPa", 1],
 };
@@ -129,7 +136,7 @@ const NAMES = {
 };
 
 /* How far each reading drifted over the window, so the lines differ. */
-const HISTORY_SHAPE = {
+const DRIFT = {
   co2: -180, pm2_5: 1.4, pm10: 1.9, pm1_0: 0.8, pm4_0: 1.7,
   voc_index: 11, nox_index: -1.4,
   air_temperature: 1.6, air_humidity: -5, air_pressure: 2.2,
@@ -149,7 +156,7 @@ function makeHass(values, dark) {
         friendly_name: "Office - Environment Sensor " + NAMES[key],
       },
     };
-    history[id] = series(values[key], HISTORY_SHAPE[key], 36);
+    history[id] = series(values[key], DRIFT[key], POINTS);
   }
   return {
     themes: { darkMode: dark },
@@ -172,7 +179,7 @@ const GOOD = {
 };
 const STUFFY = { ...GOOD, co2: 1643, voc_index: 182, pm2_5: 9.4 };
 
-function mount(paneClass, caption, dark, values, config) {
+function mount(paneClass, caption, dark, values, hoverChart) {
   const pane = document.createElement("div");
   pane.className = "pane " + paneClass;
   const cap = document.createElement("div");
@@ -182,12 +189,19 @@ function mount(paneClass, caption, dark, values, config) {
   const card = document.createElement("wabit-air-card");
   pane.appendChild(card);
   document.body.appendChild(pane);
-  card.setConfig(config || { area: "office" });
+  card.setConfig({ area: "office", hours: HOURS });
   card.hass = makeHass(values, dark);
+  if (hoverChart) {
+    // Hold one chart open so the screenshot shows the hover readout.
+    setTimeout(() => {
+      const h = card._els.chartEls.find((c) => c.spec.key === hoverChart);
+      if (h) card._hover(h, 0.62);
+    }, 30);
+  }
 }
 
-mount("light", "Fresh", false, GOOD);
+mount("light", "Fresh, reading the PM chart", false, GOOD, "pm");
 mount("dark", "Fresh", true, GOOD);
-mount("light", "Needs a window open", false, STUFFY);
+mount("light", "Needs a window open", false, STUFFY, "co2");
 </script>
 </body></html>

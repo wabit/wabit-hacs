@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.16.0";
+const VERSION = "1.17.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -5228,17 +5228,66 @@ const AIR_METRICS = [
   { key: "co2", label: "CO₂", classes: ["carbon_dioxide"], icon: "mdi:molecule-co2" },
   { key: "pm25", label: "PM2.5", classes: ["pm25"], match: /pm_?2_?5/i, icon: "mdi:blur" },
   { key: "pm10", label: "PM10", classes: ["pm10"], match: /pm_?10/i, icon: "mdi:blur" },
-  { key: "pm1", label: "PM1", classes: ["pm1"], match: /pm_?1(_?0)?(?!\d)/i, icon: "mdi:blur" },
-  { key: "pm4", label: "PM4", classes: ["pm25", "pm10", "pm1", null], match: /pm_?4/i, icon: "mdi:blur" },
-  { key: "voc", label: "VOC", classes: ["aqi"], match: /voc/i, icon: "mdi:air-filter" },
-  { key: "nox", label: "NOx", classes: ["aqi"], match: /nox/i, icon: "mdi:air-filter" },
-  { key: "temperature", label: "Temp", classes: ["temperature"], icon: "mdi:thermometer" },
+  { key: "pm1", label: "PM1.0", classes: ["pm1"], match: /pm_?1(_?0)?(?!\d)/i, icon: "mdi:blur" },
+  { key: "pm4", label: "PM4.0", classes: ["pm25", "pm10", "pm1", null], match: /pm_?4/i, icon: "mdi:blur" },
+  { key: "voc", label: "VOC", classes: ["aqi"], match: /voc/i, icon: "mdi:chemical-weapon" },
+  { key: "nox", label: "NOx", classes: ["aqi"], match: /nox/i, icon: "mdi:chemical-weapon" },
+  { key: "temperature", label: "Temperature", classes: ["temperature"], icon: "mdi:thermometer" },
   { key: "humidity", label: "Humidity", classes: ["humidity"], icon: "mdi:water-percent" },
   { key: "pressure", label: "Pressure", classes: ["atmospheric_pressure", "pressure"], icon: "mdi:gauge" },
 ];
 
 /**
- * Where each metric stops being good and starts being poor. Only the three that
+ * Series colours, carried over from the graph cards this replaces. On a chart
+ * with four lines the colour is the only thing telling them apart, so these are
+ * part of the data, not decoration - override them per metric with `colors`.
+ */
+const AIR_COLORS = {
+  pm1: "#00bcd4",
+  pm25: "#4caf50",
+  pm4: "#ff9800",
+  pm10: "#f44336",
+  co2: "#9c27b0",
+  pressure: "#2196f3",
+  temperature: "#e53935",
+  humidity: "#1e88e5",
+  voc: "var(--accent-color, #ff9800)",
+  nox: "var(--accent-color, #ff9800)",
+};
+
+/**
+ * How readings are grouped into charts. The four particle sizes share one,
+ * because each is only meaningful next to the others; the rest get their own,
+ * full width where the shape carries information and half where it does not.
+ */
+const AIR_CHARTS = [
+  {
+    key: "pm", title: "Particulate matter", icon: "mdi:blur",
+    metrics: ["pm1", "pm25", "pm4", "pm10"],
+    width: "full", legend: true, line_width: 1, lower_bound: 0,
+  },
+  {
+    key: "co2", metrics: ["co2"], width: "full",
+    labels: true, extrema: true, line_width: 2, lower_bound: 0,
+  },
+  {
+    key: "pressure", metrics: ["pressure"], width: "full",
+    labels: true, extrema: true, line_width: 2,
+  },
+  { key: "temperature", metrics: ["temperature"], width: "half", line_width: 2 },
+  { key: "humidity", metrics: ["humidity"], width: "half", line_width: 2 },
+  {
+    key: "voc", metrics: ["voc"], width: "half",
+    labels: true, extrema: true, line_width: 2, lower_bound: 0, upper_bound: 500,
+  },
+  {
+    key: "nox", metrics: ["nox"], width: "half",
+    labels: true, extrema: true, line_width: 2, lower_bound: 0, upper_bound: 500,
+  },
+];
+
+/**
+ * Where each metric stops being good and starts being poor. Only the ones that
  * say something about air quality get a verdict; temperature, humidity and
  * pressure are reported but never judged.
  */
@@ -5316,40 +5365,164 @@ function matchAirMetrics(candidates) {
 
 /** Significant figures HA suggests for a sensor, falling back on the value. */
 function airPrecision(hass, id, value) {
-  const reg = (hass.entities || {})[id];
+  const reg = ((hass && hass.entities) || {})[id];
   if (reg && typeof reg.display_precision === "number") return reg.display_precision;
   if (Math.abs(value) >= 100) return 0;
   if (Math.abs(value) >= 10) return 1;
   return 2;
 }
 
-/** An SVG path across a series of numbers, normalised to the box. */
-function sparklinePath(values, width, height) {
-  const pts = values.filter((v) => typeof v === "number" && !Number.isNaN(v));
-  if (pts.length < 2) return null;
-  let min = Math.min(...pts);
-  let max = Math.max(...pts);
+/**
+ * History, averaged into evenly spaced buckets across the window.
+ *
+ * A sensor reports when it changes, so a bucket with no sample has not gone
+ * quiet - it is still reading whatever it last said. Empty buckets therefore
+ * carry the previous value forward, and only the stretch before the first
+ * reading is left as a gap.
+ */
+function bucketSeries(entries, startMs, endMs, buckets) {
+  const out = new Array(Math.max(0, buckets)).fill(null);
+  if (!Array.isArray(entries) || !entries.length || buckets < 1) return out;
+
+  const samples = [];
+  let stamped = 0;
+  for (const e of entries) {
+    if (!e) continue;
+    const v = Number(e.s !== undefined ? e.s : e.state);
+    if (!Number.isFinite(v)) continue;
+    let t = null;
+    if (typeof e.lu === "number") t = e.lu * 1000;
+    else if (e.last_changed || e.last_updated) t = Date.parse(e.last_changed || e.last_updated);
+    if (t !== null && Number.isFinite(t)) stamped++;
+    else t = null;
+    samples.push({ v, t });
+  }
+  if (!samples.length) return out;
+
+  const sums = new Array(buckets).fill(0);
+  const counts = new Array(buckets).fill(0);
+  const span = endMs - startMs;
+  if (stamped < samples.length || span <= 0) {
+    // Without usable timestamps the only honest reading of the data is that it
+    // is evenly spaced across the window.
+    const step = samples.length > 1 ? (buckets - 1) / (samples.length - 1) : 0;
+    samples.forEach((s, i) => {
+      const idx = Math.round(i * step);
+      sums[idx] += s.v;
+      counts[idx] += 1;
+    });
+  } else {
+    for (const s of samples) {
+      let idx = Math.floor(((s.t - startMs) / span) * buckets);
+      if (idx < 0) idx = 0;
+      if (idx >= buckets) idx = buckets - 1;
+      sums[idx] += s.v;
+      counts[idx] += 1;
+    }
+  }
+
+  let carried = null;
+  for (let i = 0; i < buckets; i++) {
+    if (counts[i]) carried = sums[i] / counts[i];
+    out[i] = carried;
+  }
+  return out;
+}
+
+/** The value range a chart's axis should cover, honouring any fixed bounds. */
+function chartBounds(seriesValues, lower, upper) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const values of seriesValues || []) {
+    for (const v of values || []) {
+      if (typeof v !== "number" || Number.isNaN(v)) continue;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+  }
+  if (min === Infinity) return null;
+  if (typeof lower === "number") min = Math.min(lower, min);
+  if (typeof upper === "number") max = Math.max(upper, max);
   if (max - min < 1e-9) {
     // A flat line would divide by zero; park it in the middle instead.
     min -= 0.5;
     max += 0.5;
   }
-  const step = width / (pts.length - 1);
-  return pts
-    .map((v, i) => {
-      const x = (i * step).toFixed(2);
-      const y = (height - ((v - min) / (max - min)) * height).toFixed(2);
-      return `${i ? "L" : "M"}${x},${y}`;
-    })
-    .join(" ");
+  return { min, max };
 }
+
+/** Where a value sits in the box, as a fraction from the top. */
+function chartY(value, bounds) {
+  return 1 - (value - bounds.min) / (bounds.max - bounds.min);
+}
+
+/** An SVG path along a series. Gaps in the data break the line. */
+function linePath(values, bounds, width, height) {
+  if (!bounds || !values || values.length < 2) return "";
+  const step = width / (values.length - 1);
+  let d = "";
+  let open = false;
+  values.forEach((v, i) => {
+    if (typeof v !== "number" || Number.isNaN(v)) {
+      open = false;
+      return;
+    }
+    d += `${open ? "L" : "M"}${(i * step).toFixed(2)},${(chartY(v, bounds) * height).toFixed(2)} `;
+    open = true;
+  });
+  return d.trim();
+}
+
+/** The same series closed down to the baseline, for the fade underneath. */
+function areaPath(values, bounds, width, height) {
+  if (!bounds || !values || values.length < 2) return "";
+  const step = width / (values.length - 1);
+  let d = "";
+  let run = [];
+  const flush = () => {
+    if (run.length > 1) {
+      const first = run[0];
+      const last = run[run.length - 1];
+      d += `M${(first.i * step).toFixed(2)},${height.toFixed(2)} `;
+      for (const p of run) {
+        d += `L${(p.i * step).toFixed(2)},${(chartY(p.v, bounds) * height).toFixed(2)} `;
+      }
+      d += `L${(last.i * step).toFixed(2)},${height.toFixed(2)} Z `;
+    }
+    run = [];
+  };
+  values.forEach((v, i) => {
+    if (typeof v !== "number" || Number.isNaN(v)) flush();
+    else run.push({ i, v });
+  });
+  flush();
+  return d.trim();
+}
+
+/** Indexes of the lowest and highest readings in a series. */
+function seriesExtrema(values) {
+  let lo = -1;
+  let hi = -1;
+  (values || []).forEach((v, i) => {
+    if (typeof v !== "number" || Number.isNaN(v)) return;
+    if (lo < 0 || v < values[lo]) lo = i;
+    if (hi < 0 || v > values[hi]) hi = i;
+  });
+  return lo < 0 ? null : { min: lo, max: hi };
+}
+
+/* SVG elements need their namespace: document.createElement("svg") yields an
+   unknown HTML element that renders nothing. */
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+const AIR_VIEW_W = 300;
+const AIR_VIEW_H = 100;
 
 const AIR_STYLES = `
   :host {
     display: block;
     --wc-text: var(--md-sys-color-on-surface, var(--primary-text-color, #212121));
     --wc-muted: var(--md-sys-color-on-surface-variant, var(--secondary-text-color, #727272));
-    --wc-accent: var(--md-sys-color-primary, var(--primary-color, #3f51b5));
     --wc-tonal: var(--md-sys-color-surface-container-highest,
                  rgba(var(--rgb-primary-text-color, 33, 33, 33), 0.08));
     --wc-outline: var(--md-sys-color-outline-variant, var(--divider-color, #e0e0e0));
@@ -5386,33 +5559,96 @@ const AIR_STYLES = `
   }
   .verdict-why { color: var(--wc-muted); font-size: 0.82rem; margin-top: 2px; }
 
-  /* --------------------------------------------------------- the metrics */
-  .grid {
-    display: grid; gap: 8px; margin-top: 14px;
-    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  /* ---------------------------------------------------------- the charts */
+  .charts { display: grid; gap: 10px; margin-top: 14px; }
+  @media (min-width: 420px) {
+    .charts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .chart.full { grid-column: 1 / -1; }
   }
-  .metric {
-    border-radius: 12px; padding: 10px; background: var(--wc-tonal);
+  .chart {
+    border-radius: 14px; padding: 10px 12px 8px; background: var(--wc-tonal);
     min-width: 0;
   }
-  .metric-head { display: flex; align-items: center; gap: 6px; }
-  .metric-head .icon { --mdc-icon-size: 16px; color: var(--band, var(--wc-muted)); flex: none; }
-  .metric-label {
-    font-size: 0.68rem; letter-spacing: 0.07em; text-transform: uppercase;
-    color: var(--wc-muted); font-weight: 600;
+  .chart-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .chart-head .icon { --mdc-icon-size: 17px; color: var(--series, var(--wc-muted)); flex: none; }
+  .chart-name {
+    font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--wc-muted); font-weight: 600; min-width: 0;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .metric-value {
-    margin-top: 3px; color: var(--wc-text); font-size: 1.12rem; line-height: 1.2;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  .band-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex: none;
+    background: var(--band, transparent);
   }
-  .metric-value .unit { font-size: 0.72rem; color: var(--wc-muted); margin-left: 2px; }
-  .metric.judged .metric-value { color: var(--band, var(--wc-text)); }
-  .spark { display: block; width: 100%; height: 22px; margin-top: 6px; }
-  .spark.hidden { display: none; }
-  .spark path { fill: none; stroke: var(--band, var(--wc-muted)); stroke-width: 1.6;
-    stroke-linecap: round; stroke-linejoin: round; opacity: 0.85; }
+  .band-dot.hidden { display: none; }
+  .chart-state {
+    margin-left: auto; color: var(--wc-text); font-size: 1.15rem; line-height: 1.1;
+    font-variant-numeric: tabular-nums; white-space: nowrap; flex: none;
+  }
+  .chart-state .unit { font-size: 0.7rem; color: var(--wc-muted); margin-left: 2px; }
+
+  .plot { position: relative; margin-top: 6px; touch-action: pan-y; }
+  .chart.full .plot { height: 94px; }
+  .chart.half .plot { height: 68px; }
+  .plot.hidden { display: none; }
+  .plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .line { fill: none; stroke: var(--series); stroke-linecap: round; stroke-linejoin: round;
+          vector-effect: non-scaling-stroke; }
+  .fill { stroke: none; fill: var(--series); opacity: 0.16; }
+
+  /* Axis bounds and extrema sit in HTML, not SVG: the plot is stretched to fit
+     its box, which would distort any text inside it. */
+  .axis {
+    position: absolute; left: 0; font-size: 0.62rem; color: var(--wc-muted);
+    font-variant-numeric: tabular-nums; pointer-events: none;
+    background: var(--wc-tonal); padding-right: 3px; border-radius: 3px;
+  }
+  .axis.hidden { display: none; }
+  .axis.max { top: -2px; }
+  .axis.min { bottom: -2px; }
+  .ext {
+    position: absolute; transform: translate(-50%, -50%);
+    font-size: 0.62rem; color: var(--wc-muted); font-variant-numeric: tabular-nums;
+    pointer-events: none; white-space: nowrap;
+  }
+  .ext.hidden { display: none; }
+
+  .cross {
+    position: absolute; top: 0; bottom: 0; width: 1px; opacity: 0;
+    background: var(--wc-muted); pointer-events: none; transform: translateX(-0.5px);
+  }
+  .point {
+    position: absolute; width: 7px; height: 7px; border-radius: 50%; opacity: 0;
+    background: var(--series); pointer-events: none;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 2px var(--wc-tonal);
+  }
+  .chart.hovering .cross, .chart.hovering .point { opacity: 1; }
+  .hit { position: absolute; inset: 0; cursor: crosshair; }
+
+  /* The readout sits in whichever top corner the cursor is not near, so it
+     never leaves the card or covers the point being read. */
+  .tip {
+    position: absolute; top: 2px;
+    background: var(--md-sys-color-inverse-surface, #313033);
+    color: var(--md-sys-color-inverse-on-surface, #f5eff7);
+    border-radius: 8px; padding: 6px 8px; font-size: 0.72rem; line-height: 1.35;
+    pointer-events: none; opacity: 0; transition: opacity 90ms linear;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28); z-index: 2;
+    white-space: nowrap; min-width: 84px;
+  }
+  .chart.hovering .tip { opacity: 1; }
+  .tip-time { opacity: 0.7; font-size: 0.66rem; margin-bottom: 2px; }
+  .tip-row { display: flex; align-items: center; gap: 6px; }
+  .tip-row .sw { width: 7px; height: 7px; border-radius: 50%; background: var(--series); flex: none; }
+  .tip-row .nm { opacity: 0.8; }
+  .tip-row .val { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; }
+  .legend.hidden { display: none; }
+  .key { display: flex; align-items: center; gap: 5px; font-size: 0.7rem; color: var(--wc-muted); }
+  .key .sw { width: 8px; height: 8px; border-radius: 50%; background: var(--series); flex: none; }
+  .key .val { color: var(--wc-text); font-variant-numeric: tabular-nums; }
 
   .empty, .error { font-size: 0.9rem; line-height: 1.5; padding: 4px 0; }
   .empty { color: var(--wc-muted); }
@@ -5448,6 +5684,7 @@ class WabitAirCard extends HTMLElement {
       throw new Error("wabit-air-card: `metrics` must be a list of metric names");
     }
     const hours = Number(cfg.hours);
+    const pph = Number(cfg.points_per_hour);
 
     this._config = {
       area: isUnset(cfg.area) ? null : String(cfg.area),
@@ -5456,15 +5693,22 @@ class WabitAirCard extends HTMLElement {
       title: cfg.title,
       show_header: cfg.show_header !== false,
       show_verdict: cfg.show_verdict !== false,
-      show_sparklines: cfg.show_sparklines !== false,
+      // `show_sparklines` was the name in 1.16.0, before the graphs were real.
+      show_graphs: cfg.show_graphs !== false && cfg.show_sparklines !== false,
+      show_legend: cfg.show_legend !== false,
+      show_labels: cfg.show_labels !== false,
+      show_extrema: cfg.show_extrema !== false,
       hours: Number.isFinite(hours) && hours > 0 ? Math.min(hours, 168) : 12,
+      points_per_hour: Number.isFinite(pph) && pph > 0 ? Math.min(pph, 60) : 6,
+      colors: { ...AIR_COLORS, ...(cfg.colors || {}) },
       thresholds: { ...AIR_THRESHOLDS, ...(cfg.thresholds || {}) },
     };
 
     this._built = false;
-    this._gridKey = null;
+    this._chartKey = null;
     this._history = null;
     this._historyAt = 0;
+    this._window = null;
     if (this.shadowRoot) this.shadowRoot.innerHTML = "";
     if (this._hass) this._render();
   }
@@ -5491,7 +5735,9 @@ class WabitAirCard extends HTMLElement {
 
   getCardSize() {
     const m = this._lastModel;
-    return 2 + Math.ceil(((m && m.metrics.length) || 6) / 2);
+    const charts = (m && m.charts) || [];
+    const rows = charts.reduce((n, c) => n + (c.width === "full" ? 1 : 0.5), 0);
+    return 2 + Math.ceil(rows * 1.5 || 4);
   }
 
   _model() {
@@ -5514,10 +5760,7 @@ class WabitAirCard extends HTMLElement {
     }
 
     if (cfg.metrics) {
-      const wanted = cfg.metrics;
-      metrics = wanted
-        .map((k) => metrics.find((m) => m.key === k))
-        .filter(Boolean);
+      metrics = cfg.metrics.map((k) => metrics.find((m) => m.key === k)).filter(Boolean);
     }
 
     const read = metrics.map((m) => {
@@ -5528,10 +5771,11 @@ class WabitAirCard extends HTMLElement {
         value,
         unit: (m.st.attributes || {}).unit_of_measurement || "",
         band: airBand(m.key, value, cfg.thresholds),
+        color: cfg.colors[m.key] || "var(--wc-muted)",
       };
     });
 
-    return { metrics: read, verdict: airVerdict(read, cfg.thresholds) };
+    return { metrics: read, verdict: airVerdict(read, cfg.thresholds), charts: airChartsFor(read) };
   }
 
   _render() {
@@ -5545,7 +5789,7 @@ class WabitAirCard extends HTMLElement {
       e.error.textContent = m.error;
       e.error.style.display = "";
       e.verdict.classList.add("hidden");
-      e.grid.style.display = "none";
+      e.charts.style.display = "none";
       e.empty.style.display = "none";
       return;
     }
@@ -5559,7 +5803,7 @@ class WabitAirCard extends HTMLElement {
 
     if (!m.metrics.length) {
       e.verdict.classList.add("hidden");
-      e.grid.style.display = "none";
+      e.charts.style.display = "none";
       e.empty.style.display = "";
       e.empty.textContent = this._config.entities
         ? "None of the configured sensors are available."
@@ -5567,10 +5811,10 @@ class WabitAirCard extends HTMLElement {
       return;
     }
     e.empty.style.display = "none";
-    e.grid.style.display = "";
+    e.charts.style.display = "";
 
     this._renderVerdict(m);
-    this._renderGrid(m);
+    this._renderCharts(m);
     this._refreshHistory();
   }
 
@@ -5596,109 +5840,347 @@ class WabitAirCard extends HTMLElement {
     }
   }
 
-  _format(metric) {
-    if (metric.value === null) return "—";
-    const p = airPrecision(this._hass, metric.id, metric.value);
-    return metric.value.toFixed(p);
+  _format(metric, value) {
+    const v = value === undefined ? metric.value : value;
+    if (typeof v !== "number" || Number.isNaN(v)) return "—";
+    return v.toFixed(airPrecision(this._hass, metric.id, v));
   }
 
-  _renderGrid(m) {
+  _renderCharts(m) {
     const e = this._els;
-    const key = JSON.stringify(m.metrics.map((x) => x.id));
-    if (key !== this._gridKey) {
-      this._gridKey = key;
-      e.grid.innerHTML = "";
-      e.tiles = m.metrics.map((metric) => {
-        const tile = document.createElement("div");
-        tile.className = "metric";
-        const head = document.createElement("div");
-        head.className = "metric-head";
-        head.appendChild(this._makeIcon(metric.icon));
-        const label = document.createElement("div");
-        label.className = "metric-label";
-        label.textContent = metric.label;
-        head.appendChild(label);
-        const value = document.createElement("div");
-        value.className = "metric-value";
-        // SVG elements need their namespace: document.createElement("svg")
-        // yields an unknown HTML element that renders nothing.
-        const SVG_NS = "http://www.w3.org/2000/svg";
-        const spark = document.createElementNS(SVG_NS, "svg");
-        spark.setAttribute("viewBox", "0 0 100 22");
-        spark.setAttribute("preserveAspectRatio", "none");
-        spark.setAttribute("class", "spark hidden");
-        const path = document.createElementNS(SVG_NS, "path");
-        spark.appendChild(path);
-        tile.append(head, value, spark);
-        e.grid.appendChild(tile);
-        return { metric, tile, value, spark, path };
+    const key = JSON.stringify(
+      m.charts.map((c) => [c.key, c.width, c.series.map((s) => s.id)])
+    );
+    if (key !== this._chartKey) {
+      this._chartKey = key;
+      e.charts.innerHTML = "";
+      e.chartEls = m.charts.map((spec) => this._buildChart(spec));
+    }
+
+    e.chartEls.forEach((h, i) => {
+      h.spec = m.charts[i];
+      h.series.forEach((s, j) => (s.metric = m.charts[i].series[j]));
+      this._paintChart(h);
+    });
+  }
+
+  _buildChart(spec) {
+    const el = document.createElement("div");
+    el.className = `chart ${spec.width}`;
+
+    const head = document.createElement("div");
+    head.className = "chart-head";
+    head.appendChild(this._makeIcon(spec.icon));
+    const name = document.createElement("div");
+    name.className = "chart-name";
+    name.textContent = spec.title;
+    const bandDot = document.createElement("div");
+    bandDot.className = "band-dot hidden";
+    const state = document.createElement("div");
+    state.className = "chart-state";
+    head.append(name, bandDot, state);
+
+    const plot = document.createElement("div");
+    plot.className = "plot";
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${AIR_VIEW_W} ${AIR_VIEW_H}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+    plot.appendChild(svg);
+
+    const series = spec.series.map((metric) => {
+      const g = document.createElementNS(SVG_NS, "g");
+      g.style.setProperty("--series", metric.color);
+      const fill = document.createElementNS(SVG_NS, "path");
+      fill.setAttribute("class", "fill");
+      const line = document.createElementNS(SVG_NS, "path");
+      line.setAttribute("class", "line");
+      line.setAttribute("stroke-width", String(spec.line_width || 2));
+      g.append(fill, line);
+      svg.appendChild(g);
+
+      const point = document.createElement("div");
+      point.className = "point";
+      point.style.setProperty("--series", metric.color);
+      plot.appendChild(point);
+
+      return { metric, g, fill, line, point };
+    });
+
+    const axisMax = document.createElement("div");
+    axisMax.className = "axis max hidden";
+    const axisMin = document.createElement("div");
+    axisMin.className = "axis min hidden";
+    const extMax = document.createElement("div");
+    extMax.className = "ext hidden";
+    const extMin = document.createElement("div");
+    extMin.className = "ext hidden";
+    extMax.style.setProperty("--series", spec.series[0].color);
+    extMin.style.setProperty("--series", spec.series[0].color);
+
+    const cross = document.createElement("div");
+    cross.className = "cross";
+
+    const tip = document.createElement("div");
+    tip.className = "tip";
+    const tipTime = document.createElement("div");
+    tipTime.className = "tip-time";
+    tip.appendChild(tipTime);
+    series.forEach((s) => {
+      const row = document.createElement("div");
+      row.className = "tip-row";
+      row.style.setProperty("--series", s.metric.color);
+      const sw = document.createElement("span");
+      sw.className = "sw";
+      const nm = document.createElement("span");
+      nm.className = "nm";
+      nm.textContent = s.metric.label;
+      const val = document.createElement("span");
+      val.className = "val";
+      row.append(sw, nm, val);
+      tip.appendChild(row);
+      s.tipVal = val;
+    });
+
+    const hit = document.createElement("div");
+    hit.className = "hit";
+    plot.append(axisMax, axisMin, extMax, extMin, cross, tip, hit);
+
+    const legend = document.createElement("div");
+    legend.className = "legend hidden";
+    series.forEach((s) => {
+      const key = document.createElement("div");
+      key.className = "key";
+      key.style.setProperty("--series", s.metric.color);
+      const sw = document.createElement("span");
+      sw.className = "sw";
+      const nm = document.createElement("span");
+      nm.textContent = s.metric.label;
+      const val = document.createElement("span");
+      val.className = "val";
+      key.append(sw, nm, val);
+      legend.appendChild(key);
+      s.legendVal = val;
+    });
+
+    el.append(head, plot, legend);
+    this._els.charts.appendChild(el);
+
+    const handle = {
+      spec, el, plot, svg, series, state, bandDot, legend,
+      axisMax, axisMin, extMax, extMin, cross, tip, tipTime, hit,
+      bounds: null, buckets: 0,
+    };
+    this._bindHover(handle);
+    return handle;
+  }
+
+  /** Pointer anywhere over the plot reads out every series at that moment. */
+  _bindHover(h) {
+    const at = (ev) => {
+      const rect = h.plot.getBoundingClientRect ? h.plot.getBoundingClientRect() : null;
+      if (!rect || !rect.width) return;
+      this._hover(h, (ev.clientX - rect.left) / rect.width);
+    };
+    h.hit.addEventListener("pointermove", at);
+    h.hit.addEventListener("pointerdown", at);
+    h.hit.addEventListener("pointerleave", () => this._hover(h, null));
+    h.hit.addEventListener("pointercancel", () => this._hover(h, null));
+  }
+
+  _hover(h, fraction) {
+    const n = h.buckets;
+    if (fraction === null || !h.bounds || n < 2) {
+      h.el.classList.remove("hovering");
+      return;
+    }
+    const clamped = Math.max(0, Math.min(1, fraction));
+    let i = Math.round(clamped * (n - 1));
+    // Before the first reading there is nothing to show; step back to where
+    // the data starts rather than reporting a gap as a value.
+    while (i > 0 && h.series.every((s) => typeof s.values[i] !== "number")) i -= 1;
+    if (h.series.every((s) => typeof s.values[i] !== "number")) {
+      h.el.classList.remove("hovering");
+      return;
+    }
+
+    h.el.classList.add("hovering");
+    const x = (i / (n - 1)) * 100;
+    h.cross.style.left = `${x}%`;
+    h.series.forEach((s) => {
+      const v = s.values[i];
+      const on = typeof v === "number" && !Number.isNaN(v);
+      s.point.style.display = on ? "" : "none";
+      if (on) {
+        s.point.style.left = `${x}%`;
+        s.point.style.top = `${chartY(v, h.bounds) * 100}%`;
+      }
+      s.tipVal.textContent = on ? this._withUnit(s.metric, v) : "—";
+    });
+    h.tipTime.textContent = this._timeAt(i, n);
+    // Park the readout in the corner furthest from the cursor.
+    const right = x < 50;
+    h.tip.style.left = right ? "auto" : "2px";
+    h.tip.style.right = right ? "2px" : "auto";
+    h.hovered = i;
+  }
+
+  _withUnit(metric, value) {
+    const text = this._format(metric, value);
+    return metric.unit ? `${text} ${metric.unit}` : text;
+  }
+
+  _timeAt(i, n) {
+    const w = this._window;
+    if (!w) return "";
+    const t = new Date(w.start + ((w.end - w.start) * i) / (n - 1));
+    try {
+      return new Intl.DateTimeFormat(this._hass.locale && this._hass.locale.language, {
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(t);
+    } catch (err) {
+      return t.toISOString().slice(11, 16);
+    }
+  }
+
+  _paintChart(h) {
+    const cfg = this._config;
+    const spec = h.spec;
+    const hist = this._history || {};
+    const w = this._window || this._defaultWindow();
+    const buckets = Math.max(2, Math.round((cfg.hours * cfg.points_per_hour)));
+    h.buckets = buckets;
+
+    h.series.forEach((s) => {
+      s.values = cfg.show_graphs
+        ? bucketSeries(hist[s.metric.id], w.start, w.end, buckets)
+        : new Array(buckets).fill(null);
+      s.g.style.setProperty("--series", s.metric.color);
+      s.point.style.setProperty("--series", s.metric.color);
+    });
+
+    const bounds = chartBounds(h.series.map((s) => s.values), spec.lower_bound, spec.upper_bound);
+    const drawable = !!bounds && h.series.some((s) => s.values.some((v) => typeof v === "number"));
+    h.bounds = drawable ? bounds : null;
+    h.plot.classList.toggle("hidden", !drawable);
+
+    h.series.forEach((s) => {
+      s.line.setAttribute("d", drawable ? linePath(s.values, bounds, AIR_VIEW_W, AIR_VIEW_H) : "");
+      s.fill.setAttribute("d", drawable ? areaPath(s.values, bounds, AIR_VIEW_W, AIR_VIEW_H) : "");
+    });
+
+    // The headline figure is the live state, not the last point of history.
+    const lead = h.series[0].metric;
+    h.el.style.setProperty("--series", lead.color);
+    if (h.series.length === 1) {
+      h.state.textContent = "";
+      const num = document.createElement("span");
+      num.textContent = this._format(lead);
+      h.state.appendChild(num);
+      if (lead.unit) {
+        const unit = document.createElement("span");
+        unit.className = "unit";
+        unit.textContent = lead.unit;
+        h.state.appendChild(unit);
+      }
+    } else {
+      h.state.textContent = "";
+    }
+
+    const worst = airVerdict(h.series.map((s) => s.metric), cfg.thresholds);
+    const flagged = worst.band === "fair" || worst.band === "poor";
+    h.bandDot.classList.toggle("hidden", !flagged);
+    if (flagged) h.bandDot.style.setProperty("--band", `var(--wc-${worst.band})`);
+
+    const showLegend = cfg.show_legend && spec.legend && h.series.length > 1;
+    h.legend.classList.toggle("hidden", !showLegend);
+    if (showLegend) {
+      h.series.forEach((s) => {
+        s.legendVal.textContent = this._withUnit(s.metric, s.metric.value);
       });
     }
 
-    e.tiles.forEach((t, i) => {
-      const metric = m.metrics[i];
-      t.metric = metric;
-      t.tile.classList.toggle("judged", !!metric.band);
-      t.tile.style.setProperty("--band", metric.band ? `var(--wc-${metric.band})` : "");
-      t.value.textContent = "";
-      const num = document.createElement("span");
-      num.textContent = this._format(metric);
-      t.value.appendChild(num);
-      if (metric.unit) {
-        const unit = document.createElement("span");
-        unit.className = "unit";
-        unit.textContent = metric.unit;
-        t.value.appendChild(unit);
+    const showAxis = cfg.show_labels && spec.labels && drawable;
+    h.axisMax.classList.toggle("hidden", !showAxis);
+    h.axisMin.classList.toggle("hidden", !showAxis);
+    if (showAxis) {
+      h.axisMax.textContent = this._format(lead, bounds.max);
+      h.axisMin.textContent = this._format(lead, bounds.min);
+    }
+
+    const ext = cfg.show_extrema && spec.extrema && drawable && h.series.length === 1
+      ? seriesExtrema(h.series[0].values)
+      : null;
+    h.extMax.classList.toggle("hidden", !ext);
+    h.extMin.classList.toggle("hidden", !ext);
+    if (ext) {
+      const values = h.series[0].values;
+      const place = (el, idx) => {
+        const x = (idx / (buckets - 1)) * 100;
+        el.textContent = this._format(lead, values[idx]);
+        el.style.left = `${x}%`;
+        el.style.top = `${chartY(values[idx], bounds) * 100}%`;
+        // A marker at either end would otherwise hang outside the plot.
+        el.style.transform =
+          x < 12 ? "translate(0, -50%)"
+          : x > 88 ? "translate(-100%, -50%)"
+          : "translate(-50%, -50%)";
+      };
+      place(h.extMax, ext.max);
+      place(h.extMin, ext.min);
+      // With a flat line both markers land together; one is enough.
+      h.extMin.classList.toggle("hidden", ext.min === ext.max);
+      // An axis label is dropped where the extremum marker already answers it:
+      // either it reads the same number, or it is close enough to collide.
+      if (showAxis) {
+        const yMax = chartY(values[ext.max], bounds) * 100;
+        const yMin = chartY(values[ext.min], bounds) * 100;
+        h.axisMax.classList.toggle(
+          "hidden", h.axisMax.textContent === h.extMax.textContent || yMax < 15);
+        h.axisMin.classList.toggle(
+          "hidden", h.axisMin.textContent === h.extMin.textContent || yMin > 85);
       }
-    });
-
-    this._renderSparklines();
+    }
   }
 
-  _renderSparklines() {
-    const e = this._els;
-    if (!e.tiles) return;
-    const on = this._config.show_sparklines && !!this._history;
-    e.tiles.forEach((t) => {
-      const series = on ? this._history[t.metric.id] : null;
-      const values = Array.isArray(series)
-        ? series.map((p) => Number(p.s !== undefined ? p.s : p.state)).filter((v) => Number.isFinite(v))
-        : [];
-      const d = sparklinePath(values, 100, 22);
-      // classList works on SVG; assigning .className does not.
-      t.spark.classList.toggle("hidden", !d);
-      if (d) t.path.setAttribute("d", d);
-    });
+  _defaultWindow() {
+    const end = Date.now();
+    return { start: end - this._config.hours * 3600000, end };
   }
 
-  /** History drives the sparklines; without it they simply do not appear. */
+  /** History draws the graphs; without it the readings still stand on their own. */
   _refreshHistory() {
     const cfg = this._config;
     const m = this._lastModel;
-    if (!cfg.show_sparklines || !m || !m.metrics || !m.metrics.length) return;
+    if (!cfg.show_graphs || !m || !m.metrics || !m.metrics.length) return;
     if (!this._hass.callWS) return;
     if (this._historyAt && Date.now() - this._historyAt < 290000) return;
     this._historyAt = Date.now();
 
-    const end = new Date();
-    const start = new Date(end.getTime() - cfg.hours * 3600000);
+    const w = this._defaultWindow();
     this._hass
       .callWS({
         type: "history/history_during_period",
-        start_time: start.toISOString(),
-        end_time: end.toISOString(),
+        start_time: new Date(w.start).toISOString(),
+        end_time: new Date(w.end).toISOString(),
         entity_ids: m.metrics.map((x) => x.id),
         minimal_response: true,
         no_attributes: true,
       })
       .then((res) => {
         this._history = res || {};
-        this._renderSparklines();
+        this._window = w;
+        this._repaint();
       })
       .catch(() => {
         this._history = null;
-        this._renderSparklines();
+        this._repaint();
       });
+  }
+
+  _repaint() {
+    const e = this._els;
+    if (e && e.chartEls) e.chartEls.forEach((h) => this._paintChart(h));
   }
 
   _makeIcon(icon) {
@@ -5765,13 +6247,42 @@ class WabitAirCard extends HTMLElement {
     verdict.append(dot, vmain);
     body.appendChild(verdict);
 
-    const grid = document.createElement("div");
-    grid.className = "grid";
-    body.appendChild(grid);
+    const charts = document.createElement("div");
+    charts.className = "charts";
+    body.appendChild(charts);
 
-    Object.assign(this._els, { error, empty, verdict, verdictWord, verdictWhy, grid, tiles: null });
+    Object.assign(this._els, {
+      error, empty, verdict, verdictWord, verdictWhy, charts, chartEls: null,
+    });
     this._built = true;
   }
+}
+
+/** Groups the metrics that were found into the charts that can be drawn. */
+function airChartsFor(metrics) {
+  const byKey = new Map(metrics.map((m) => [m.key, m]));
+  const claimed = new Set();
+  const out = [];
+  for (const spec of AIR_CHARTS) {
+    const series = spec.metrics.map((k) => byKey.get(k)).filter(Boolean);
+    if (!series.length) continue;
+    series.forEach((s) => claimed.add(s.key));
+    out.push({
+      ...spec,
+      series,
+      title: spec.title || series[0].label,
+      icon: spec.icon || series[0].icon,
+    });
+  }
+  // A sensor no chart asked for still deserves to be drawn.
+  for (const m of metrics) {
+    if (claimed.has(m.key)) continue;
+    out.push({
+      key: m.key, metrics: [m.key], series: [m], width: "half",
+      line_width: 2, title: m.label, icon: m.icon,
+    });
+  }
+  return out;
 }
 
 /* -------------------------------------------------- wabit-air-card-editor */
@@ -5780,9 +6291,13 @@ const AIR_LABELS = {
   area: "Room",
   entities: "Specific sensors (leave empty to use the room)",
   title: "Card title (defaults to the room name)",
-  hours: "Hours of history behind each sparkline",
+  hours: "Hours of history on each graph",
+  points_per_hour: "Points per hour",
   show_verdict: "Show the overall verdict",
-  show_sparklines: "Show sparklines",
+  show_graphs: "Show the graphs",
+  show_legend: "Show the legend on shared graphs",
+  show_labels: "Show the axis range",
+  show_extrema: "Mark the highest and lowest points",
   show_header: "Show the header",
 };
 
@@ -5791,8 +6306,12 @@ const AIR_SCHEMA = [
   { name: "entities", selector: { entity: { domain: "sensor", multiple: true } } },
   { name: "title", selector: { text: {} } },
   { name: "hours", selector: { number: { min: 1, max: 168, mode: "box" } } },
+  { name: "points_per_hour", selector: { number: { min: 1, max: 60, mode: "box" } } },
   { name: "show_verdict", selector: { boolean: {} } },
-  { name: "show_sparklines", selector: { boolean: {} } },
+  { name: "show_graphs", selector: { boolean: {} } },
+  { name: "show_legend", selector: { boolean: {} } },
+  { name: "show_labels", selector: { boolean: {} } },
+  { name: "show_extrema", selector: { boolean: {} } },
   { name: "show_header", selector: { boolean: {} } },
 ];
 
@@ -5855,8 +6374,15 @@ class WabitAirCardEditor extends HTMLElement {
       entities: this._config.entities,
       title: this._config.title,
       hours: this._config.hours === undefined ? 12 : this._config.hours,
+      points_per_hour:
+        this._config.points_per_hour === undefined ? 6 : this._config.points_per_hour,
       show_verdict: this._config.show_verdict !== false,
-      show_sparklines: this._config.show_sparklines !== false,
+      // `show_sparklines` was the option name in 1.16.0.
+      show_graphs:
+        this._config.show_graphs !== false && this._config.show_sparklines !== false,
+      show_legend: this._config.show_legend !== false,
+      show_labels: this._config.show_labels !== false,
+      show_extrema: this._config.show_extrema !== false,
       show_header: this._config.show_header !== false,
     };
     if (JSON.stringify(this._form.data) !== JSON.stringify(data)) this._form.data = data;

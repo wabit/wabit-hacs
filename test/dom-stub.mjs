@@ -110,7 +110,9 @@ const EXPORTS = [
   "f1Countdown", "F1_CIRCUIT_SLUGS", "WabitF1Card", "WabitF1CardEditor",
   // air card
   "airSensorsInArea", "matchAirMetrics", "airBand", "airVerdict",
-  "sparklinePath", "airPrecision", "AIR_THRESHOLDS",
+  "airPrecision", "AIR_THRESHOLDS", "AIR_COLORS", "AIR_CHARTS",
+  "bucketSeries", "chartBounds", "chartY", "linePath", "areaPath",
+  "seriesExtrema", "airChartsFor", "AIR_SCHEMA",
   "WabitAirCard", "WabitAirCardEditor",
 ];
 
