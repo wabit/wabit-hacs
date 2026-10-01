@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.7.1";
+const VERSION = "1.8.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -3218,6 +3218,792 @@ if (!window.customCards.some((c) => c.type === "wabit-bin-collection-card")) {
     description:
       "Upcoming bin collections, grouped by day so bins that go out together read " +
       "as one collection.",
+    preview: true,
+    documentationURL: REPO,
+  });
+}
+
+/* ------------------------------------------------------- wabit-media-card */
+
+/* media_player supported_features bits we care about. */
+const MF = {
+  PAUSE: 1, SEEK: 2, VOLUME_SET: 4, VOLUME_MUTE: 8,
+  PREVIOUS: 16, NEXT: 32, TURN_ON: 128, TURN_OFF: 256,
+  VOLUME_STEP: 1024, SELECT_SOURCE: 2048, STOP: 4096, PLAY: 16384,
+};
+const can = (st, bit) => !!(((st && st.attributes && st.attributes.supported_features) || 0) & bit);
+
+/**
+ * Platforms that expose a player which never reports what is actually playing.
+ * sonos_cloud mirrors every Sonos purely for announcements, and UniFi Protect
+ * camera speakers are a one-way intercom - both are noise in a room card.
+ */
+const MEDIA_NOISE_PLATFORMS = ["sonos_cloud", "unifiprotect"];
+
+const ACTIVE_STATES = new Set(["playing", "paused", "buffering"]);
+const DEAD_STATES = new Set(["unavailable", "unknown"]);
+
+/** Higher sorts first: what the room should feature. */
+function mediaRank(st) {
+  if (!st) return -1;
+  const s = st.state;
+  if (s === "playing" || s === "buffering") return 5;
+  if (s === "paused") return 4;
+  if (s === "on" && (st.attributes || {}).media_title) return 3;
+  if (s === "on") return 2;
+  if (s === "idle") return 1;
+  if (s === "off") return 0;
+  return -1; // unavailable / unknown
+}
+
+function mediaPlayersInArea(hass, areaId, denyPlatforms) {
+  const entities = (hass && hass.entities) || {};
+  const devices = (hass && hass.devices) || {};
+  const deny = new Set(denyPlatforms || []);
+  const out = [];
+  for (const [id, ent] of Object.entries(entities)) {
+    if (!id.startsWith("media_player.")) continue;
+    if (ent.entity_category || ent.hidden || ent.hidden_by || ent.disabled_by) continue;
+    if (ent.platform && deny.has(ent.platform)) continue;
+    const device = ent.device_id ? devices[ent.device_id] : null;
+    const area = ent.area_id || (device ? device.area_id : null);
+    if (area !== areaId) continue;
+    if (!hass.states[id]) continue;
+    out.push(id);
+  }
+  return out.sort();
+}
+
+/** 93 -> "1:33", 3725 -> "1:02:05" */
+function formatDuration(totalSeconds) {
+  const t = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = t % 60;
+  const mm = h ? String(m).padStart(2, "0") : String(m);
+  return `${h ? h + ":" : ""}${mm}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * Where the track has got to now. Home Assistant reports the position at a
+ * moment in time, so it has to be advanced by hand while playing.
+ */
+function mediaPosition(st, now) {
+  const a = (st && st.attributes) || {};
+  if (typeof a.media_position !== "number") return null;
+  let pos = a.media_position;
+  if (st.state === "playing" && a.media_position_updated_at) {
+    const since = (now.getTime() - new Date(a.media_position_updated_at).getTime()) / 1000;
+    if (Number.isFinite(since) && since > 0) pos += since;
+  }
+  const dur = typeof a.media_duration === "number" ? a.media_duration : null;
+  return dur ? Math.min(pos, dur) : pos;
+}
+
+/** The line under the title: artist, show, station or app, whichever fits. */
+function mediaSubtitle(st) {
+  const a = (st && st.attributes) || {};
+  if (a.media_artist) {
+    return a.media_album_name ? `${a.media_artist} — ${a.media_album_name}` : a.media_artist;
+  }
+  if (a.media_series_title) {
+    const se =
+      a.media_season && a.media_episode ? ` · S${a.media_season}E${a.media_episode}` : "";
+    return `${a.media_series_title}${se}`;
+  }
+  if (a.media_channel) return a.media_channel;
+  if (a.app_name) return a.app_name;
+  return "";
+}
+
+function mediaTitle(st) {
+  const a = (st && st.attributes) || {};
+  return a.media_title || a.media_channel || a.app_name || "";
+}
+
+const MEDIA_STYLES = `
+  :host {
+    display: block;
+    --wc-text: var(--md-sys-color-on-surface, var(--primary-text-color, #212121));
+    --wc-muted: var(--md-sys-color-on-surface-variant, var(--secondary-text-color, #727272));
+    --wc-accent: var(--md-sys-color-primary, var(--primary-color, #3f51b5));
+    --wc-tonal: var(--md-sys-color-surface-container-highest,
+                 rgba(var(--rgb-primary-text-color, 33, 33, 33), 0.08));
+    --wc-outline: var(--md-sys-color-outline-variant, var(--divider-color, #e0e0e0));
+    --wc-accent-tonal: var(--md-sys-color-primary-container,
+                        rgba(var(--rgb-primary-color, 63, 81, 181), 0.16));
+    --wc-on-accent-tonal: var(--md-sys-color-on-primary-container, var(--wc-accent));
+  }
+  ha-card { overflow: hidden; }
+  .header { padding: 12px 16px 4px; }
+  .title {
+    color: var(--ha-card-header-color, var(--wc-text));
+    font-family: var(--ha-card-header-font-family, inherit);
+    font-size: var(--ha-card-header-font-size, 24px);
+    font-weight: 400; letter-spacing: -0.012em; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .body { padding: 12px 16px 16px; }
+  .body.tight { padding-top: 4px; }
+
+  /* ------------------------------------------------------------- now playing */
+  .now { display: flex; gap: 14px; align-items: flex-start; }
+  .now.hidden { display: none; }
+  .art {
+    width: 76px; height: 76px; border-radius: 12px; flex: none;
+    background: var(--wc-tonal) center/cover no-repeat;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.16);
+  }
+  .art .icon { color: var(--wc-muted); --mdc-icon-size: 30px; }
+  .art.has-art .icon { display: none; }
+  .meta { flex: 1; min-width: 0; padding-top: 2px; }
+  .eyebrow {
+    font-size: 0.68rem; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--wc-muted); font-weight: 600;
+  }
+  .track {
+    color: var(--wc-text); font-size: 1.12rem; line-height: 1.3; margin-top: 3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sub {
+    color: var(--wc-muted); font-size: 0.85rem; line-height: 1.35; margin-top: 1px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .where {
+    color: var(--wc-muted); font-size: 0.74rem; margin-top: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* --------------------------------------------------------------- progress */
+  .progress { margin-top: 12px; }
+  .progress.hidden { display: none; }
+  .bar { height: 4px; border-radius: 999px; background: var(--wc-tonal); overflow: hidden; }
+  .bar-fill {
+    height: 100%; width: 0%; border-radius: 999px; background: var(--wc-accent);
+    transition: width 900ms linear;
+  }
+  .times {
+    display: flex; justify-content: space-between; margin-top: 4px;
+    font-size: 0.72rem; color: var(--wc-muted); font-variant-numeric: tabular-nums;
+  }
+  @media (prefers-reduced-motion: reduce) { .bar-fill { transition: none; } }
+
+  /* --------------------------------------------------------------- controls */
+  .controls {
+    display: flex; align-items: center; gap: 4px; margin-top: 10px;
+  }
+  .controls.hidden { display: none; }
+  .btn {
+    width: 40px; height: 40px; flex: none; padding: 0; border: none;
+    border-radius: 50%; background: none; cursor: pointer;
+    color: var(--wc-muted); display: flex; align-items: center; justify-content: center;
+    transition: background 150ms, color 150ms;
+  }
+  .btn:hover:not(:disabled) { background: var(--wc-tonal); color: var(--wc-text); }
+  .btn:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: 2px; }
+  .btn:disabled { opacity: 0.3; cursor: default; }
+  .btn.primary {
+    background: var(--wc-accent-tonal); color: var(--wc-on-accent-tonal);
+    width: 46px; height: 46px;
+  }
+  .btn.primary:hover:not(:disabled) { background: var(--wc-accent-tonal); filter: brightness(1.06); }
+  .btn .icon { color: inherit; --mdc-icon-size: 22px; }
+  .btn.primary .icon { --mdc-icon-size: 26px; }
+  .spacer { flex: 1; }
+  .vol { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 1 150px; }
+  .vol.hidden { display: none; }
+  input.volume { width: 100%; cursor: pointer; accent-color: var(--wc-accent); }
+
+  /* ------------------------------------------------------------ other rooms */
+  .others { margin-top: 4px; }
+  .others.hidden { display: none; }
+  .other {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 9px 0; border: none; border-top: 1px solid var(--wc-outline);
+    background: none; cursor: pointer; font: inherit; text-align: left;
+    color: var(--wc-text);
+  }
+  .other:hover .other-name { color: var(--wc-accent); }
+  .other:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
+  .other .icon { color: var(--wc-muted); --mdc-icon-size: 20px; flex: none; }
+  .other.live .icon { color: var(--wc-accent); }
+  .other-main { flex: 1; min-width: 0; }
+  .other-name {
+    font-size: 0.92rem; line-height: 1.3; transition: color 150ms;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .other-state {
+    font-size: 0.75rem; color: var(--wc-muted); line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .other.dim .other-name { color: var(--wc-muted); }
+
+  .idle, .error { font-size: 0.9rem; line-height: 1.5; padding: 4px 0 2px; }
+  .idle { color: var(--wc-muted); }
+  .error { color: var(--error-color, #db4437); }
+`;
+
+class WabitMediaCard extends HTMLElement {
+  static getConfigElement() {
+    return document.createElement("wabit-media-card-editor");
+  }
+
+  static getStubConfig(hass) {
+    const areas = (hass && hass.areas) || {};
+    let best = null;
+    for (const id of Object.keys(areas)) {
+      const n = mediaPlayersInArea(hass, id, MEDIA_NOISE_PLATFORMS).length;
+      if (n && (!best || n > best.n)) best = { id, n };
+    }
+    return { type: "custom:wabit-media-card", area: best ? best.id : "" };
+  }
+
+  setConfig(config) {
+    const cfg = config || {};
+    const list = (v, key) => {
+      if (v === undefined || v === null) return null;
+      if (!Array.isArray(v)) {
+        throw new Error(`wabit-media-card: \`${key}\` must be a list`);
+      }
+      return v;
+    };
+    if (isUnset(cfg.area) && !(Array.isArray(cfg.entities) && cfg.entities.length)) {
+      throw new Error("wabit-media-card: either `area` or `entities` is required");
+    }
+    (cfg.entities || []).forEach((e) => {
+      if (typeof e !== "string" || !e.startsWith("media_player.")) {
+        throw new Error(
+          `wabit-media-card: \`entities\` may only contain media players, got "${e}"`
+        );
+      }
+    });
+
+    this._config = {
+      area: isUnset(cfg.area) ? null : String(cfg.area),
+      entities: list(cfg.entities, "entities"),
+      exclude: list(cfg.exclude, "exclude") || [],
+      exclude_platforms: list(cfg.exclude_platforms, "exclude_platforms") || MEDIA_NOISE_PLATFORMS,
+      title: cfg.title,
+      show_header: cfg.show_header !== false,
+      show_volume: cfg.show_volume !== false,
+      show_progress: cfg.show_progress !== false,
+      show_others: cfg.show_others !== false,
+      idle_text: cfg.idle_text || "Nothing playing",
+    };
+
+    this._built = false;
+    this._othersKey = null;
+    this._selected = null;
+    if (this.shadowRoot) this.shadowRoot.innerHTML = "";
+    if (this._hass) this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._config) this._render();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  connectedCallback() {
+    // Keeps the progress bar moving between state updates.
+    this._tick = window.setInterval(() => {
+      if (this._built && this._hass) this._render();
+    }, 1000);
+  }
+
+  disconnectedCallback() {
+    if (this._tick) window.clearInterval(this._tick);
+    this._tick = null;
+  }
+
+  getCardSize() {
+    return 4;
+  }
+
+  _model() {
+    const hass = this._hass;
+    const cfg = this._config;
+    let ids;
+    let areaName = cfg.title;
+
+    if (cfg.entities) {
+      ids = cfg.entities.filter((id) => hass.states[id]);
+    } else {
+      if (!hass.entities || !hass.areas) {
+        return { error: "This Home Assistant build does not expose the area registry to cards." };
+      }
+      const areaId = resolveAreaId(hass, cfg.area);
+      if (!areaId) return { error: `No area called "${cfg.area}".` };
+      if (areaName === undefined) areaName = (hass.areas[areaId] || {}).name || cfg.area;
+      ids = mediaPlayersInArea(hass, areaId, cfg.exclude_platforms);
+    }
+
+    const excluded = new Set(cfg.exclude);
+    ids = ids.filter((id) => !excluded.has(id));
+    if (!ids.length) {
+      return { areaName, empty: true, players: [], featured: null };
+    }
+
+    const players = ids
+      .map((id) => ({ id, st: hass.states[id], rank: mediaRank(hass.states[id]) }))
+      .sort(
+        (a, b) =>
+          b.rank - a.rank ||
+          // Same rank: whatever started most recently is what you just put on.
+          (Date.parse(b.st.last_changed) || 0) - (Date.parse(a.st.last_changed) || 0) ||
+          a.id.localeCompare(b.id)
+      );
+
+    // A player the user picked wins, as long as it is still around.
+    let featured = players.find((p) => p.id === this._selected) || null;
+    if (!featured) featured = players.find((p) => p.rank >= 3) || null;
+
+    return {
+      areaName: areaName === undefined ? "" : areaName,
+      players,
+      featured,
+      anyActive: players.some((p) => ACTIVE_STATES.has(p.st.state)),
+    };
+  }
+
+  _render() {
+    if (!this._config || !this._hass) return;
+    if (!this._built) this._build();
+    const m = this._model();
+    this._lastModel = m;
+    const e = this._els;
+
+    if (m.error) {
+      e.error.textContent = m.error;
+      e.error.style.display = "";
+      e.now.classList.add("hidden");
+      e.controls.classList.add("hidden");
+      e.progress.classList.add("hidden");
+      e.others.classList.add("hidden");
+      e.idle.style.display = "none";
+      return;
+    }
+    e.error.style.display = "none";
+
+    if (e.title) {
+      e.title.textContent = m.areaName || "";
+      // Keep a direct reference rather than walking up to the parent.
+      e.header.style.display = m.areaName ? "" : "none";
+    }
+
+    this._renderNowPlaying(m);
+    this._renderOthers(m);
+  }
+
+  _renderNowPlaying(m) {
+    const e = this._els;
+    const f = m.featured;
+
+    if (!f) {
+      e.now.classList.add("hidden");
+      e.controls.classList.add("hidden");
+      e.progress.classList.add("hidden");
+      e.idle.style.display = "";
+      e.idle.textContent = m.empty
+        ? `No media players in ${m.areaName || "this room"}.`
+        : this._config.idle_text;
+      return;
+    }
+    e.idle.style.display = "none";
+    e.now.classList.remove("hidden");
+
+    const st = f.st;
+    const a = st.attributes || {};
+    const now = new Date();
+
+    const art = a.entity_picture || "";
+    if (e.art._art !== art) {
+      e.art._art = art;
+      e.art.style.backgroundImage = art ? `url("${art}")` : "";
+      e.art.classList.toggle("has-art", !!art);
+    }
+
+    const stateWord =
+      st.state === "playing" ? "Now playing"
+        : st.state === "paused" ? "Paused"
+        : st.state === "buffering" ? "Buffering"
+        : st.state === "idle" ? "Idle"
+        : st.state === "off" ? "Off"
+        : DEAD_STATES.has(st.state) ? "Unavailable" : "On";
+    e.eyebrow.textContent = stateWord;
+
+    const title = mediaTitle(st);
+    e.track.textContent = title || this._nameOf(f.id);
+    const sub = mediaSubtitle(st);
+    e.sub.textContent = sub;
+    e.sub.style.display = sub ? "" : "none";
+    // When the title is the track, the player's own name belongs underneath.
+    e.where.textContent = title ? this._nameOf(f.id) : "";
+    e.where.style.display = title ? "" : "none";
+
+    // progress
+    const dur = typeof a.media_duration === "number" ? a.media_duration : null;
+    const pos = mediaPosition(st, now);
+    const showProgress = this._config.show_progress && !!dur && pos !== null;
+    e.progress.classList.toggle("hidden", !showProgress);
+    if (showProgress) {
+      const pct = Math.max(0, Math.min(100, (pos / dur) * 100));
+      e.fill.style.width = `${pct.toFixed(2)}%`;
+      e.elapsed.textContent = formatDuration(pos);
+      e.total.textContent = formatDuration(dur);
+    }
+
+    // controls
+    const playing = st.state === "playing" || st.state === "buffering";
+    e.controls.classList.remove("hidden");
+    e.prev.disabled = !can(st, MF.PREVIOUS);
+    e.next.disabled = !can(st, MF.NEXT);
+    const canToggle = can(st, MF.PLAY) || can(st, MF.PAUSE) || can(st, MF.TURN_ON);
+    e.play.disabled = !canToggle;
+    this._setIcon(e.playIcon, playing ? "mdi:pause" : "mdi:play");
+    e.play.setAttribute("aria-label", playing ? "Pause" : "Play");
+
+    const showVol = this._config.show_volume && can(st, MF.VOLUME_SET);
+    e.vol.classList.toggle("hidden", !showVol);
+    if (showVol) {
+      const muted = !!a.is_volume_muted;
+      this._setIcon(e.muteIcon, muted ? "mdi:volume-off" : "mdi:volume-high");
+      e.mute.disabled = !can(st, MF.VOLUME_MUTE);
+      e.mute.setAttribute("aria-label", muted ? "Unmute" : "Mute");
+      if (this.shadowRoot.activeElement !== e.volume) {
+        const lvl = typeof a.volume_level === "number" ? Math.round(a.volume_level * 100) : 0;
+        e.volume.value = String(lvl);
+      }
+      e.volume.disabled = muted;
+    }
+  }
+
+  _renderOthers(m) {
+    const e = this._els;
+    const others = this._config.show_others
+      ? m.players.filter((p) => !m.featured || p.id !== m.featured.id)
+      : [];
+    e.others.classList.toggle("hidden", !others.length);
+
+    const key = JSON.stringify(others.map((p) => p.id));
+    if (key !== this._othersKey) {
+      this._othersKey = key;
+      e.others.innerHTML = "";
+      e.otherRows = others.map((p) => {
+        const row = document.createElement("button");
+        row.className = "other";
+        row.type = "button";
+        const icon = this._makeIcon(this._iconFor(this._hass.states[p.id]));
+        const main = document.createElement("div");
+        main.className = "other-main";
+        const name = document.createElement("div");
+        name.className = "other-name";
+        const state = document.createElement("div");
+        state.className = "other-state";
+        main.append(name, state);
+        row.append(icon, main);
+        row.addEventListener("click", () => {
+          this._selected = p.id;
+          this._render();
+        });
+        e.others.appendChild(row);
+        return { id: p.id, row, name, state };
+      });
+    }
+
+    (e.otherRows || []).forEach((r) => {
+      const st = this._hass.states[r.id];
+      if (!st) return;
+      const live = ACTIVE_STATES.has(st.state);
+      r.row.classList.toggle("live", live);
+      r.row.classList.toggle("dim", DEAD_STATES.has(st.state) || st.state === "off");
+      r.name.textContent = this._nameOf(r.id);
+      const t = mediaTitle(st);
+      r.state.textContent = live && t ? `${st.state === "paused" ? "Paused" : "Playing"} · ${t}` : st.state;
+    });
+  }
+
+  _nameOf(id) {
+    const reg = (this._hass.entities || {})[id] || {};
+    const st = this._hass.states[id];
+    return reg.name || (st && st.attributes && st.attributes.friendly_name) || id;
+  }
+
+  _makeIcon(icon) {
+    if (customElements.get("ha-icon")) {
+      const el = document.createElement("ha-icon");
+      el.setAttribute("icon", icon);
+      el.className = "icon";
+      el._haIcon = true; // the DOM uppercases tagName, so flag it instead
+      return el;
+    }
+    const span = document.createElement("span");
+    span.className = "icon";
+    span._icon = icon;
+    return span;
+  }
+
+  _setIcon(el, icon) {
+    if (!el) return;
+    if (el._haIcon) {
+      if (el.getAttribute("icon") !== icon) el.setAttribute("icon", icon);
+    } else {
+      el._icon = icon;
+    }
+  }
+
+  /** A speaker, a telly or a generic player, from the entity's device class. */
+  _iconFor(st) {
+    const dc = (st && st.attributes && st.attributes.device_class) || "";
+    if (dc === "tv") return "mdi:television";
+    if (dc === "receiver") return "mdi:audio-video";
+    return "mdi:speaker";
+  }
+
+  _call(service, data) {
+    const f = this._lastModel && this._lastModel.featured;
+    if (!f) return;
+    this._hass.callService("media_player", service, { entity_id: f.id, ...(data || {}) });
+  }
+
+  _build() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = MEDIA_STYLES;
+    root.appendChild(style);
+
+    const card = document.createElement("ha-card");
+    root.appendChild(card);
+
+    this._els = {};
+
+    if (this._config.show_header) {
+      const header = document.createElement("div");
+      header.className = "header";
+      const title = document.createElement("div");
+      title.className = "title";
+      header.appendChild(title);
+      card.appendChild(header);
+      this._els.title = title;
+      this._els.header = header;
+    }
+
+    const body = document.createElement("div");
+    body.className = this._config.show_header ? "body tight" : "body";
+    card.appendChild(body);
+
+    const error = document.createElement("div");
+    error.className = "error";
+    error.style.display = "none";
+    const idle = document.createElement("div");
+    idle.className = "idle";
+    idle.style.display = "none";
+    body.append(error, idle);
+
+    // now playing
+    const now = document.createElement("div");
+    now.className = "now";
+    const art = document.createElement("div");
+    art.className = "art";
+    art.appendChild(this._makeIcon("mdi:music"));
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const eyebrow = document.createElement("div");
+    eyebrow.className = "eyebrow";
+    const track = document.createElement("div");
+    track.className = "track";
+    const sub = document.createElement("div");
+    sub.className = "sub";
+    const where = document.createElement("div");
+    where.className = "where";
+    meta.append(eyebrow, track, sub, where);
+    now.append(art, meta);
+    body.appendChild(now);
+
+    // progress
+    const progress = document.createElement("div");
+    progress.className = "progress hidden";
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    const fill = document.createElement("div");
+    fill.className = "bar-fill";
+    bar.appendChild(fill);
+    const times = document.createElement("div");
+    times.className = "times";
+    const elapsed = document.createElement("span");
+    const total = document.createElement("span");
+    times.append(elapsed, total);
+    progress.append(bar, times);
+    body.appendChild(progress);
+
+    // controls
+    const controls = document.createElement("div");
+    controls.className = "controls hidden";
+    const mkBtn = (icon, label, cls, fn) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = cls ? `btn ${cls}` : "btn";
+      b.setAttribute("aria-label", label);
+      const ic = this._makeIcon(icon);
+      b.appendChild(ic);
+      b.addEventListener("click", fn);
+      return { b, ic };
+    };
+    const prev = mkBtn("mdi:skip-previous", "Previous", "", () => this._call("media_previous_track"));
+    const play = mkBtn("mdi:play", "Play", "primary", () => this._call("media_play_pause"));
+    const next = mkBtn("mdi:skip-next", "Next", "", () => this._call("media_next_track"));
+    const spacer = document.createElement("div");
+    spacer.className = "spacer";
+    const vol = document.createElement("div");
+    vol.className = "vol";
+    const mute = mkBtn("mdi:volume-high", "Mute", "", () => {
+      const f = this._lastModel && this._lastModel.featured;
+      if (!f) return;
+      this._call("volume_mute", { is_volume_muted: !(f.st.attributes || {}).is_volume_muted });
+    });
+    const volume = document.createElement("input");
+    volume.type = "range";
+    volume.className = "volume";
+    volume.min = "0";
+    volume.max = "100";
+    volume.step = "1";
+    volume.addEventListener("change", () =>
+      this._call("volume_set", { volume_level: Number(volume.value) / 100 })
+    );
+    vol.append(mute.b, volume);
+    controls.append(prev.b, play.b, next.b, spacer, vol);
+    body.appendChild(controls);
+
+    const others = document.createElement("div");
+    others.className = "others";
+    body.appendChild(others);
+
+    Object.assign(this._els, {
+      error, idle, now, art, eyebrow, track, sub, where,
+      progress, fill, elapsed, total,
+      controls, prev: prev.b, play: play.b, playIcon: play.ic, next: next.b,
+      vol, mute: mute.b, muteIcon: mute.ic, volume, others, otherRows: [],
+    });
+    this._built = true;
+  }
+}
+
+/* ------------------------------------------------ wabit-media-card-editor */
+
+const MEDIA_LABELS = {
+  area: "Room",
+  entities: "Specific players (leave empty to use the room)",
+  exclude: "Players to leave out",
+  title: "Card title (defaults to the room name)",
+  show_header: "Show the header",
+  show_volume: "Show the volume slider",
+  show_progress: "Show the progress bar",
+  show_others: "List the room's other players underneath",
+  idle_text: "Text when nothing is playing",
+};
+
+const MEDIA_SCHEMA = [
+  { name: "area", selector: { area: {} } },
+  { name: "entities", selector: { entity: { domain: "media_player", multiple: true } } },
+  { name: "exclude", selector: { entity: { domain: "media_player", multiple: true } } },
+  { name: "title", selector: { text: {} } },
+  { name: "idle_text", selector: { text: {} } },
+  { name: "show_volume", selector: { boolean: {} } },
+  { name: "show_progress", selector: { boolean: {} } },
+  { name: "show_others", selector: { boolean: {} } },
+  { name: "show_header", selector: { boolean: {} } },
+];
+
+class WabitMediaCardEditor extends HTMLElement {
+  setConfig(config) {
+    this._config = { ...(config || {}) };
+    if (!this._built) this._build();
+    this._push();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._push();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  _build() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = EDITOR_STYLES;
+    root.appendChild(style);
+
+    if (!customElements.get("ha-form")) {
+      const note = document.createElement("div");
+      note.className = "note";
+      note.textContent =
+        "This Home Assistant build does not provide ha-form, so the visual editor " +
+        "is unavailable. Configure this card in YAML instead - the options are " +
+        "documented at " + REPO;
+      root.appendChild(note);
+      this._form = null;
+      this._built = true;
+      return;
+    }
+
+    const form = document.createElement("ha-form");
+    form.schema = MEDIA_SCHEMA;
+    form.computeLabel = (s) => MEDIA_LABELS[s.name] || s.name;
+    form.addEventListener("value-changed", (ev) => {
+      ev.stopPropagation();
+      this._config = { ...this._config, ...ev.detail.value };
+      fireEvent(this, "config-changed", { config: this._config });
+    });
+    root.appendChild(form);
+    this._form = form;
+    this._built = true;
+  }
+
+  _push() {
+    if (!this._form || !this._hass || !this._config) return;
+    this._form.hass = this._hass;
+    const data = {
+      area: this._config.area,
+      entities: this._config.entities,
+      exclude: this._config.exclude,
+      title: this._config.title,
+      idle_text: this._config.idle_text || "Nothing playing",
+      show_volume: this._config.show_volume !== false,
+      show_progress: this._config.show_progress !== false,
+      show_others: this._config.show_others !== false,
+      show_header: this._config.show_header !== false,
+    };
+    if (JSON.stringify(this._form.data) !== JSON.stringify(data)) this._form.data = data;
+  }
+}
+
+if (!customElements.get("wabit-media-card")) {
+  customElements.define("wabit-media-card", WabitMediaCard);
+}
+if (!customElements.get("wabit-media-card-editor")) {
+  customElements.define("wabit-media-card-editor", WabitMediaCardEditor);
+}
+
+if (!window.customCards.some((c) => c.type === "wabit-media-card")) {
+  window.customCards.push({
+    type: "wabit-media-card",
+    name: "Wabit Media",
+    description:
+      "What is playing in a room, across speakers, TVs and streamers, with the " +
+      "active one brought to the front.",
     preview: true,
     documentationURL: REPO,
   });

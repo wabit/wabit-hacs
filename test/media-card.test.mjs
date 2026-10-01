@@ -1,0 +1,274 @@
+/**
+ * Tests for wabit-media-card.
+ *
+ *   node test/media-card.test.mjs
+ */
+import { loadCards, harness } from "./dom-stub.mjs";
+
+const T = loadCards(process.argv[2]);
+const { eq, throws, done } = harness();
+
+const RealDate = Date;
+const NOW = new RealDate(2026, 9, 1, 13, 0, 0);
+globalThis.Date = class extends RealDate {
+  constructor(...a) { return a.length ? new RealDate(...a) : new RealDate(NOW); }
+  static now() { return NOW.getTime(); }
+};
+
+/* --------------------------------------------------------------- fixture */
+const calls = [];
+const SONOS_FEATURES = 8321599;          // everything a Sonos offers
+const LIMITED = 1 | 16384;               // play + pause only
+
+const iso = (secondsAgo) => new RealDate(NOW.getTime() - secondsAgo * 1000).toISOString();
+const mp = (name, state, attrs, secondsAgo) => ({
+  state,
+  last_changed: iso(secondsAgo === undefined ? 600 : secondsAgo),
+  attributes: { friendly_name: name, supported_features: SONOS_FEATURES, ...attrs },
+});
+
+const hass = {
+  themes: { darkMode: false },
+  areas: {
+    living_room: { area_id: "living_room", name: "Living Room", aliases: ["lounge"] },
+    office: { area_id: "office", name: "Office", aliases: [] },
+    hallway: { area_id: "hallway", name: "Hallway", aliases: [] },
+  },
+  devices: {
+    d_fire: { area_id: "living_room" },
+    d_fire_cloud: { area_id: "living_room" },
+    d_atv: { area_id: "living_room" },
+    d_tv: { area_id: "living_room" },
+    d_cam: { area_id: "living_room" },
+    d_desk: { area_id: "office" },
+    d_office_atv: { area_id: "office" },
+  },
+  entities: {
+    "media_player.fireplace": { entity_id: "media_player.fireplace", device_id: "d_fire", platform: "sonos" },
+    // the same speaker again, announcements only - must be filtered by default
+    "media_player.fireplace_2": { entity_id: "media_player.fireplace_2", device_id: "d_fire_cloud", platform: "sonos_cloud" },
+    "media_player.living_room_apple_tv": { entity_id: "media_player.living_room_apple_tv", device_id: "d_atv", platform: "apple_tv" },
+    "media_player.living_room_tv": { entity_id: "media_player.living_room_tv", device_id: "d_tv", platform: "samsungtv" },
+    "media_player.living_room_camera_speaker": { entity_id: "media_player.living_room_camera_speaker", device_id: "d_cam", platform: "unifiprotect" },
+    "media_player.hidden_one": { entity_id: "media_player.hidden_one", device_id: "d_fire", platform: "sonos", hidden: true },
+    "media_player.diag": { entity_id: "media_player.diag", device_id: "d_fire", platform: "sonos", entity_category: "diagnostic" },
+    "media_player.no_state": { entity_id: "media_player.no_state", device_id: "d_fire", platform: "sonos" },
+    "media_player.office_desk": { entity_id: "media_player.office_desk", device_id: "d_desk", platform: "sonos" },
+    "media_player.office_atv": { entity_id: "media_player.office_atv", device_id: "d_office_atv", platform: "apple_tv" },
+    "light.not_a_player": { entity_id: "light.not_a_player", device_id: "d_fire", platform: "sonos" },
+  },
+  states: {
+    "media_player.fireplace": mp("Fireplace - (Sonos)", "paused", {
+      media_title: "Radio 6 Music", media_channel: "BBC Radio 6",
+      volume_level: 0.21, is_volume_muted: false,
+      entity_picture: "/api/media_player_proxy/fireplace?token=abc",
+    }),
+    "media_player.fireplace_2": mp("Fireplace", "idle", {}),
+    "media_player.living_room_apple_tv": mp("Living room - Apple TV", "off", {}),
+    "media_player.living_room_tv": mp("Living room tv", "off", {}),
+    "media_player.living_room_camera_speaker": mp("Camera Speaker", "idle", {}),
+    "media_player.hidden_one": mp("Hidden", "playing", {}),
+    "media_player.diag": mp("Diag", "playing", {}),
+    "media_player.office_desk": mp("Josh's Desk - (Sonos)", "playing", {
+      media_title: "Teardrop", media_artist: "Massive Attack", media_album_name: "Mezzanine",
+      media_duration: 330, media_position: 60,
+      media_position_updated_at: iso(30),
+      volume_level: 0.5, is_volume_muted: false,
+    }, 30),
+    "media_player.tv_dc": mp("Telly", "off", { device_class: "tv" }),
+    "media_player.office_atv": mp("Office - (Apple TV)", "playing", {
+      media_title: "The One Where It Begins", media_series_title: "Friends",
+      media_season: 1, media_episode: 2, app_name: "Netflix",
+      supported_features: LIMITED,
+    }, 900),
+  },
+  callService: (d, s, data) => calls.push([d, s, data]),
+};
+
+const mk = (cfg) => {
+  const c = new T.WabitMediaCard();
+  c.setConfig(cfg);
+  c.hass = hass;
+  return c;
+};
+
+/* ------------------------------------------------------------- discovery */
+eq("finds the room's players, filtering noise",
+   T.mediaPlayersInArea(hass, "living_room", T.MEDIA_NOISE_PLATFORMS),
+   ["media_player.fireplace", "media_player.living_room_apple_tv",
+    "media_player.living_room_tv"]);
+eq("without the deny list the twins come back",
+   T.mediaPlayersInArea(hass, "living_room", []).includes("media_player.fireplace_2"), true);
+eq("default deny list", T.MEDIA_NOISE_PLATFORMS, ["sonos_cloud", "unifiprotect"]);
+eq("other areas unaffected", T.mediaPlayersInArea(hass, "office", T.MEDIA_NOISE_PLATFORMS),
+   ["media_player.office_atv", "media_player.office_desk"]);
+eq("discovery order is stable",
+   T.mediaPlayersInArea(hass, "office", T.MEDIA_NOISE_PLATFORMS),
+   T.mediaPlayersInArea(hass, "office", T.MEDIA_NOISE_PLATFORMS).slice().sort());
+eq("empty area", T.mediaPlayersInArea(hass, "hallway", T.MEDIA_NOISE_PLATFORMS), []);
+
+/* --------------------------------------------------------------- ranking */
+eq("playing outranks paused",
+   T.mediaRank(hass.states["media_player.office_desk"]) >
+   T.mediaRank(hass.states["media_player.fireplace"]), true);
+eq("paused outranks off",
+   T.mediaRank(hass.states["media_player.fireplace"]) >
+   T.mediaRank(hass.states["media_player.living_room_tv"]), true);
+eq("unavailable ranks below off",
+   T.mediaRank({ state: "unavailable", attributes: {} }), -1);
+eq("on with media outranks bare on",
+   T.mediaRank({ state: "on", attributes: { media_title: "x" } }) >
+   T.mediaRank({ state: "on", attributes: {} }), true);
+
+/* ---------------------------------------------------------- text helpers */
+eq("duration under an hour", T.formatDuration(93), "1:33");
+eq("duration over an hour", T.formatDuration(3725), "1:02:05");
+eq("duration zero", T.formatDuration(0), "0:00");
+eq("negative clamps", T.formatDuration(-5), "0:00");
+eq("artist and album", T.mediaSubtitle(hass.states["media_player.office_desk"]),
+   "Massive Attack — Mezzanine");
+eq("series and episode", T.mediaSubtitle(hass.states["media_player.office_atv"]),
+   "Friends · S1E2");
+eq("falls back to the channel", T.mediaSubtitle(hass.states["media_player.fireplace"]),
+   "BBC Radio 6");
+eq("falls back to the app", T.mediaSubtitle({ attributes: { app_name: "Spotify" } }), "Spotify");
+eq("nothing to say", T.mediaSubtitle({ attributes: {} }), "");
+eq("title prefers media_title", T.mediaTitle(hass.states["media_player.fireplace"]),
+   "Radio 6 Music");
+
+/* position advances while playing, but not while paused */
+const playingAt = T.mediaPosition(hass.states["media_player.office_desk"], NOW);
+eq("position advances with the clock", Math.round(playingAt), 90); // 60s + 30s elapsed
+eq("paused position is not advanced",
+   T.mediaPosition({ state: "paused", attributes: { media_position: 42,
+     media_position_updated_at: iso(3600) } }, NOW), 42);
+eq("position clamps to the duration",
+   T.mediaPosition({ state: "playing", attributes: { media_position: 300, media_duration: 310,
+     media_position_updated_at: iso(3600) } }, NOW), 310);
+eq("no position reported", T.mediaPosition({ state: "playing", attributes: {} }, NOW), null);
+
+/* ------------------------------------------------------------- rendering */
+const lr = mk({ area: "living_room" });
+eq("title is the room", lr._els.title.textContent, "Living Room");
+eq("features the paused Sonos", lr._lastModel.featured.id, "media_player.fireplace");
+eq("eyebrow reads paused", lr._els.eyebrow.textContent, "Paused");
+eq("track shown", lr._els.track.textContent, "Radio 6 Music");
+eq("subtitle shown", lr._els.sub.textContent, "BBC Radio 6");
+eq("player name underneath", lr._els.where.textContent, "Fireplace - (Sonos)");
+eq("artwork applied", lr._els.art.classList.contains("has-art"), true);
+eq("no progress without a duration", lr._els.progress.classList.contains("hidden"), true);
+eq("volume reflects the player", lr._els.volume.value, "21");
+eq("controls shown", lr._els.controls.classList.contains("hidden"), false);
+eq("two other players listed", lr._els.otherRows.length, 2);
+eq("twins not listed", lr._els.otherRows.some((r) => r.id === "media_player.fireplace_2"), false);
+
+const office = mk({ area: "office" });
+// Both are playing; the one that started most recently is featured.
+eq("features the most recently started", office._lastModel.featured.id, "media_player.office_desk");
+eq("eyebrow reads now playing", office._els.eyebrow.textContent, "Now playing");
+eq("progress shown with a duration", office._els.progress.classList.contains("hidden"), false);
+eq("elapsed uses the advanced position", office._els.elapsed.textContent, "1:30");
+eq("total duration", office._els.total.textContent, "5:30");
+eq("progress bar width", office._els.fill.style.width, "27.27%");
+eq("play icon shows pause while playing", office._els.playIcon._icon, "mdi:pause");
+eq("paused player shows a play icon", lr._els.playIcon._icon, "mdi:play");
+
+/* controls follow supported_features */
+const limited = mk({ entities: ["media_player.office_atv"] });
+eq("next disabled when unsupported", limited._els.next.disabled, true);
+eq("previous disabled when unsupported", limited._els.prev.disabled, true);
+eq("play still enabled", limited._els.play.disabled, false);
+eq("volume hidden when unsupported", limited._els.vol.classList.contains("hidden"), true);
+eq("series subtitle rendered", limited._els.sub.textContent, "Friends · S1E2");
+
+/* ---------------------------------------------------------- interactions */
+lr._els.play._fire("click");
+eq("play/pause call", calls.at(-1),
+   ["media_player", "media_play_pause", { entity_id: "media_player.fireplace" }]);
+lr._els.next._fire("click");
+eq("next call", calls.at(-1),
+   ["media_player", "media_next_track", { entity_id: "media_player.fireplace" }]);
+lr._els.prev._fire("click");
+eq("previous call", calls.at(-1),
+   ["media_player", "media_previous_track", { entity_id: "media_player.fireplace" }]);
+lr._els.volume.value = "40";
+lr._els.volume._fire("change");
+eq("volume call", calls.at(-1),
+   ["media_player", "volume_set", { entity_id: "media_player.fireplace", volume_level: 0.4 }]);
+lr._els.mute._fire("click");
+eq("mute call", calls.at(-1),
+   ["media_player", "volume_mute",
+    { entity_id: "media_player.fireplace", is_volume_muted: true }]);
+
+/* tapping another player features it */
+const otherId = lr._els.otherRows[0].id;
+lr._els.otherRows[0].row._fire("click");
+eq("tapping switches the featured player", lr._lastModel.featured.id, otherId);
+eq("the previous one moves to the list",
+   lr._els.otherRows.some((r) => r.id === "media_player.fireplace"), true);
+lr._els.play._fire("click");
+eq("controls follow the new selection", calls.at(-1)[2].entity_id, otherId);
+
+/* --------------------------------------------------------- quiet and odd */
+const quiet = mk({ area: "living_room", exclude: ["media_player.fireplace"] });
+eq("nothing active shows the idle line", quiet._els.now.classList.contains("hidden"), true);
+eq("idle text", quiet._els.idle.textContent, "Nothing playing");
+eq("custom idle text",
+   mk({ area: "living_room", exclude: ["media_player.fireplace"], idle_text: "All quiet" })
+     ._els.idle.textContent, "All quiet");
+
+const bare = mk({ area: "hallway" });
+eq("empty room explained", bare._els.idle.textContent, "No media players in Hallway.");
+
+const unknown = mk({ area: "atlantis" });
+eq("unknown area message", unknown._els.error.textContent, 'No area called "atlantis".');
+
+const noReg = new T.WabitMediaCard();
+noReg.setConfig({ area: "living_room" });
+noReg.hass = { ...hass, entities: undefined, areas: undefined };
+eq("no registry message", noReg._els.error.textContent,
+   "This Home Assistant build does not expose the area registry to cards.");
+
+/* ------------------------------------------------------------- config */
+throws("area or entities required",
+  () => new T.WabitMediaCard().setConfig({}), "either `area` or `entities`");
+throws("entities must be media players",
+  () => new T.WabitMediaCard().setConfig({ entities: ["light.x"] }),
+  "may only contain media players");
+eq("explicit entities skip discovery",
+   mk({ entities: ["media_player.office_desk"] })._lastModel.players.length, 1);
+eq("title can be overridden", mk({ area: "office", title: "Desk" })._els.title.textContent, "Desk");
+eq("header can be hidden", mk({ area: "office", show_header: false })._els.title, undefined);
+eq("others can be hidden",
+   mk({ area: "living_room", show_others: false })._els.others.classList.contains("hidden"), true);
+
+eq("stub picks the busiest room", T.WabitMediaCard.getStubConfig(hass).area, "living_room");
+eq("registered", !!customElements.get("wabit-media-card"), true);
+eq("listed in the picker",
+   window.customCards.some((c) => c.type === "wabit-media-card"), true);
+
+
+/* --------------------------------------------- icons must actually change --
+   The DOM reports tagName upper case, so a `=== "ha-icon"` check never matched
+   and the play/pause glyph silently stopped updating in real browsers. */
+customElements.define("ha-icon", class {});
+const iconed = mk({ area: "office" });
+eq("uses a real ha-icon", iconed._els.playIcon.tagName, "HA-ICON");
+eq("playing shows pause", iconed._els.playIcon.getAttribute("icon"), "mdi:pause");
+iconed._selected = "media_player.office_atv";
+iconed._render();
+eq("still pause for another playing player",
+   iconed._els.playIcon.getAttribute("icon"), "mdi:pause");
+// A paused player must flip it back.
+const pausedIcons = mk({ area: "living_room" });
+eq("paused shows play", pausedIcons._els.playIcon.getAttribute("icon"), "mdi:play");
+eq("mute glyph tracks the player",
+   pausedIcons._els.muteIcon.getAttribute("icon"), "mdi:volume-high");
+// Other rows pick an icon from the device class.
+const dcCard = mk({ entities: ["media_player.fireplace", "media_player.tv_dc"] });
+eq("a tv gets a television icon",
+   dcCard._els.otherRows[0].row.children[0].getAttribute("icon"), "mdi:television");
+delete customElements._d["ha-icon"];
+
+globalThis.Date = RealDate;
+done("media");

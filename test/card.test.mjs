@@ -295,7 +295,7 @@ const sc = new T.WabitWakeupCard();
 sc.setConfig(withLight());
 sc.hass = hass;
 
-const scCard = sc.shadowRoot.children.find((e) => e.tagName === "ha-card");
+const scCard = sc.shadowRoot.children.find((e) => e.tagName === "HA-CARD");
 const scHeader = scCard.children.find((e) => e.classList.contains("header"));
 eq("header rendered by the card", !!scHeader, true);
 eq("title not left to ha-card", scCard.getAttribute("header"), undefined);
@@ -336,7 +336,7 @@ sc2.setConfig(withLight({ show_settings: false }));
 sc2.hass = hass;
 eq("no panel when disabled", sc2._els.settings, null);
 eq("inline card size", sc2.getCardSize(), 6);
-const sc2Card = sc2.shadowRoot.children.find((e) => e.tagName === "ha-card");
+const sc2Card = sc2.shadowRoot.children.find((e) => e.tagName === "HA-CARD");
 const sc2Header = sc2Card.children.find((e) => e.classList.contains("header"));
 eq("no gear when disabled", sc2Header.children.some((e) => e.classList.contains("gear")), false);
 const sc2Body = sc2Card.children.find((e) => e.classList.contains("body"));
@@ -348,7 +348,7 @@ sc3.setConfig({ title: "Bare", schedules: [{ name: "X", time: "input_datetime.be
 sc3.hass = hass;
 eq("no gear with nothing to tuck", sc3._els.settings, null);
 const sc3Header = sc3.shadowRoot.children
-  .find((e) => e.tagName === "ha-card").children.find((e) => e.classList.contains("header"));
+  .find((e) => e.tagName === "HA-CARD").children.find((e) => e.classList.contains("header"));
 eq("header still shows title", sc3Header.children[0].textContent, "Bare");
 eq("no gear rendered", sc3Header.children.some((e) => e.classList.contains("gear")), false);
 
@@ -357,7 +357,7 @@ const sc4 = new T.WabitWakeupCard();
 sc4.setConfig(withLight({ title: "" }));
 sc4.hass = hass;
 const sc4Header = sc4.shadowRoot.children
-  .find((e) => e.tagName === "ha-card").children.find((e) => e.classList.contains("header"));
+  .find((e) => e.tagName === "HA-CARD").children.find((e) => e.classList.contains("header"));
 eq("headerless title still gets a gear", !!sc4Header, true);
 eq("empty title text", sc4Header.children[0].textContent, "");
 eq("gear present without title", sc4Header.children.some((e) => e.classList.contains("gear")), true);

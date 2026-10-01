@@ -307,7 +307,7 @@ eq("override used exactly as written",
 customElements.define("ha-icon", class {});
 const iconCard = mkUk({});
 const firstChip = iconCard._els.chips.children[0];
-eq("chip uses an ha-icon", firstChip.children[0].tagName, "ha-icon");
+eq("chip uses an ha-icon", firstChip.children[0].tagName, "HA-ICON");
 eq("chip icon is the bin's own", firstChip.children[0].getAttribute("icon"),
    "mdi:bottle-soda-classic-outline");
 eq("chip icon tinted", firstChip.children[0].style._props["--bin"], "maroon");
@@ -322,11 +322,11 @@ eq("row icon does not get the bar styling",
 eq("row icon is sized as a row glyph",
    iconCard._els.rows.children[0].children[0].children[0].classList.contains("glyph-row"), true);
 eq("row uses an ha-icon",
-   iconCard._els.rows.children[0].children[0].children[0].tagName, "ha-icon");
+   iconCard._els.rows.children[0].children[0].children[0].tagName, "HA-ICON");
 delete customElements._d["ha-icon"];
 // Without ha-icon it must still render, as a coloured dot.
 const dotCard = mkUk({});
-eq("falls back to a dot", dotCard._els.chips.children[0].children[0].tagName, "span");
+eq("falls back to a dot", dotCard._els.chips.children[0].children[0].tagName, "SPAN");
 eq("dot still tinted", dotCard._els.chips.children[0].children[0].style._props["--bin"], "maroon");
 
 /* --------------------------------------------------------- failure modes */

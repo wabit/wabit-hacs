@@ -29,3 +29,4 @@ jobs:
       - run: node test/card.test.mjs
       - run: node test/room-card.test.mjs
       - run: node test/bin-card.test.mjs
+      - run: node test/media-card.test.mjs

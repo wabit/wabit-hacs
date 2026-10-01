@@ -1,0 +1,239 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Wabit Media preview</title>
+<style>
+  body {
+    margin: 0; padding: 24px; display: flex; gap: 24px; align-items: flex-start;
+    font-family: Roboto, -apple-system, "Segoe UI", sans-serif;
+    background: #f2eef6;
+  }
+  .pane { width: 420px; }
+  .pane.dark { background: #141218; padding: 16px; border-radius: 20px; }
+  .pane.light { background: #fef7ff; padding: 16px; border-radius: 20px; }
+  .caption { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+             font-weight: 700; margin-bottom: 10px; }
+  .pane.light .caption { color: #6750a4; }
+  .pane.dark .caption { color: #d0bcff; }
+
+  /* Material You token sets, the same names the real themes expose. */
+  .pane.light {
+    --md-sys-color-primary: #6750a4;
+    --md-sys-color-on-surface: #1d1b20;
+    --md-sys-color-on-surface-variant: #49454f;
+    --md-sys-color-surface-container-highest: #e6e0e9;
+    --md-sys-color-primary-container: #eaddff;
+    --md-sys-color-on-primary-container: #21005d;
+    --md-sys-color-outline-variant: #cac4d0;
+    --card-background-color: #fffbfe;
+    --primary-text-color: #1d1b20;
+    --secondary-text-color: #49454f;
+    --primary-color: #6750a4;
+    --rgb-primary-color: 103, 80, 164;
+    --divider-color: #cac4d0;
+  }
+  .pane.dark {
+    --md-sys-color-primary: #d0bcff;
+    --md-sys-color-on-surface: #e6e0e9;
+    --md-sys-color-on-surface-variant: #cac4d0;
+    --md-sys-color-surface-container-highest: #36343b;
+    --md-sys-color-primary-container: #4f378b;
+    --md-sys-color-on-primary-container: #eaddff;
+    --md-sys-color-outline-variant: #49454f;
+    --card-background-color: #211f26;
+    --primary-text-color: #e6e0e9;
+    --secondary-text-color: #cac4d0;
+    --primary-color: #d0bcff;
+    --rgb-primary-color: 208, 188, 255;
+    --divider-color: #49454f;
+  }
+</style>
+</head>
+<body>
+<script>
+/* Stand-ins for the Home Assistant frontend elements the card uses. */
+customElements.define("ha-card", class extends HTMLElement {
+  connectedCallback() {
+    if (this._done) return; this._done = true;
+    const header = this.getAttribute("header");
+    const sr = this.attachShadow({ mode: "open" });
+    sr.innerHTML =
+      '<style>:host{display:block;background:var(--card-background-color);' +
+      'border-radius:var(--ha-card-border-radius,16px);' +
+      'box-shadow:var(--ha-card-box-shadow,0 1px 3px rgba(0,0,0,.18));}' +
+      '.h{font-size:1.3rem;font-weight:400;padding:14px 16px 0;' +
+      'color:var(--md-sys-color-on-surface,var(--primary-text-color));}</style>' +
+      (header ? '<div class="h">' + header + '</div>' : '') + '<slot></slot>';
+  }
+});
+
+const ICONS = {
+  "mdi:music": "M12 3v10.55A4 4 0 1014 17V7h4V3h-6z",
+  "mdi:play": "M8 5.14v14l11-7-11-7z",
+  "mdi:pause": "M14 19h4V5h-4v14zM6 19h4V5H6v14z",
+  "mdi:skip-previous": "M6 6h2v12H6V6zm3.5 6 8.5 6V6l-8.5 6z",
+  "mdi:skip-next": "M16 6h2v12h-2V6zM6 18l8.5-6L6 6v12z",
+  "mdi:volume-high":
+    "M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4-0.91 7-4.49 7-8.77s-3-7.86-7-8.77zM16.5 12c0-1.77-1-3.29-2.5-4.03v8.05c1.5-.73 2.5-2.25 2.5-4.02zM3 9v6h4l5 5V4L7 9H3z",
+  "mdi:volume-off":
+    "M12 4 9.91 6.09 12 8.18V4zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.94 8.94 0 003.69-1.81L19.73 21 21 19.73 4.27 3zM19 12c0 .82-.15 1.61-.41 2.34l1.53 1.53A8.9 8.9 0 0021 12c0-4.28-3-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71z",
+  "mdi:speaker":
+    "M17 2H7a2 2 0 00-2 2v16a2 2 0 002 2h10a2 2 0 002-2V4a2 2 0 00-2-2zm-5 2.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 15a4.5 4.5 0 110-9 4.5 4.5 0 010 9zm0-7a2.5 2.5 0 100 5 2.5 2.5 0 000-5z",
+};
+customElements.define("ha-icon", class extends HTMLElement {
+  // Real ha-icon re-renders when its `icon` attribute changes; the stand-in has
+  // to as well, or a play/pause swap is invisible here but fine in Home Assistant.
+  static get observedAttributes() { return ["icon"]; }
+  connectedCallback() { this._paint(); }
+  attributeChangedCallback() { this._paint(); }
+  _paint() {
+    if (!this.shadowRoot) {
+      this.attachShadow({ mode: "open" });
+      this.shadowRoot.innerHTML =
+        "<style>:host{display:inline-flex;width:var(--mdc-icon-size,24px);" +
+        "height:var(--mdc-icon-size,24px);}svg{width:100%;height:100%;fill:currentColor;}</style>" +
+        "<svg viewBox='0 0 24 24'><path></path></svg>";
+    }
+    const d = ICONS[this.getAttribute("icon")] || "";
+    this.shadowRoot.querySelector("path").setAttribute("d", d);
+  }
+});
+
+customElements.define("ha-entity-picker", class extends HTMLElement {
+  constructor() {
+    super();
+    const sr = this.attachShadow({ mode: "open" });
+    sr.innerHTML =
+      '<style>:host{display:block;}' +
+      '.f{display:flex;align-items:center;gap:8px;background:var(--md-sys-color-surface-container-highest,#e6e0e9);' +
+      'border-radius:999px;padding:7px 12px;font-size:0.95rem;' +
+      'color:var(--md-sys-color-on-surface,var(--primary-text-color));}' +
+      '.v{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '.c{opacity:.6;font-size:0.7rem;}</style>' +
+      '<div class="f"><span class="v"></span><span class="c">&#9660;</span></div>';
+    this._vEl = sr.querySelector(".v");
+  }
+  connectedCallback() { this._paint(); }
+  set hass(h) { this._hass = h; this._paint(); }
+  set value(v) { this._value = v; this._paint(); }
+  get value() { return this._value; }
+  set disabled(v) { this._disabled = !!v; }
+  get disabled() { return this._disabled; }
+  _paint() {
+    if (!this._vEl) return;
+    const st = this._hass && this._value ? this._hass.states[this._value] : null;
+    this._vEl.textContent = st
+      ? (st.attributes.friendly_name || this._value)
+      : (this._value || "");
+  }
+});
+
+customElements.define("ha-switch", class extends HTMLElement {
+  constructor() {
+    super();
+    this._checked = false; this._disabled = false;
+    const sr = this.attachShadow({ mode: "open" });
+    sr.innerHTML =
+      '<style>:host{display:inline-block;width:52px;height:32px;}' +
+      '.t{width:52px;height:32px;border-radius:999px;position:relative;' +
+      'transition:background 180ms,border-color 180ms;box-sizing:border-box;}' +
+      '.k{position:absolute;top:50%;border-radius:50%;transition:all 180ms;}</style>' +
+      '<div class="t"><div class="k"></div></div>';
+    this._t = sr.querySelector(".t"); this._k = sr.querySelector(".k");
+    // NB: no this.style / attribute writes here - a custom element constructor
+    // must not touch its own attributes, and Chrome aborts it if you do.
+  }
+  connectedCallback() { this._paint(); }
+  set checked(v) { this._checked = !!v; this._paint(); }
+  get checked() { return this._checked; }
+  set disabled(v) { this._disabled = !!v; this._paint(); }
+  get disabled() { return this._disabled; }
+  _paint() {
+    if (!this._t) return;
+    const on = this._checked;
+    const accent = "var(--md-sys-color-primary, var(--primary-color))";
+    this._t.style.background = on ? accent : "var(--md-sys-color-surface-container-highest,#e6e0e9)";
+    this._t.style.border = on ? "2px solid transparent" : "2px solid var(--md-sys-color-outline-variant,#79747e)";
+    this._t.style.opacity = this._disabled ? "0.45" : "1";
+    this._k.style.width = on ? "24px" : "16px";
+    this._k.style.height = on ? "24px" : "16px";
+    this._k.style.left = on ? "24px" : "8px";
+    this._k.style.transform = "translateY(-50%)";
+    this._k.style.background = on ? "#ffffff" : "var(--md-sys-color-outline-variant,#79747e)";
+  }
+});
+</script>
+
+<script src="../dist/wabit-cards.js"></script>
+
+<script>
+const Real = Date;
+const NOW = new Real(2026, 9, 1, 13, 0, 0);
+globalThis.Date = class extends Real {
+  constructor(...a) { return a.length ? new Real(...a) : new Real(NOW); }
+  static now() { return NOW.getTime(); }
+};
+const iso = (s) => new Real(NOW.getTime() - s * 1000).toISOString();
+const ART = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23e05f3a'/%3E%3Cstop offset='0.55' stop-color='%23a33a6e'/%3E%3Cstop offset='1' stop-color='%232d2a6e'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='200' height='200' fill='url(%23g)'/%3E%3Ccircle cx='100' cy='100' r='26' fill='none' stroke='%23ffffff' stroke-opacity='0.55' stroke-width='6'/%3E%3C/svg%3E";
+const FULL = 8321599;
+
+const base = {
+  areas: {
+    living_room: { area_id: "living_room", name: "Living Room", aliases: [] },
+    office: { area_id: "office", name: "Office", aliases: [] },
+  },
+  devices: {
+    d_fire: { area_id: "living_room" }, d_cloud: { area_id: "living_room" },
+    d_atv: { area_id: "living_room" }, d_tv: { area_id: "living_room" },
+    d_desk: { area_id: "office" },
+  },
+  entities: {
+    "media_player.fireplace": { entity_id: "media_player.fireplace", device_id: "d_fire", platform: "sonos" },
+    "media_player.fireplace_2": { entity_id: "media_player.fireplace_2", device_id: "d_cloud", platform: "sonos_cloud" },
+    "media_player.living_room_apple_tv": { entity_id: "media_player.living_room_apple_tv", device_id: "d_atv", platform: "apple_tv" },
+    "media_player.living_room_tv": { entity_id: "media_player.living_room_tv", device_id: "d_tv", platform: "samsungtv" },
+  },
+  callService: () => {},
+};
+
+const musicStates = {
+  "media_player.fireplace": { state: "playing", last_changed: iso(40), attributes: {
+    friendly_name: "Fireplace - (Sonos)", supported_features: FULL,
+    media_title: "Teardrop", media_artist: "Massive Attack", media_album_name: "Mezzanine",
+    media_duration: 330, media_position: 96, media_position_updated_at: iso(14),
+    volume_level: 0.34, is_volume_muted: false, entity_picture: ART } },
+  "media_player.fireplace_2": { state: "idle", attributes: { friendly_name: "Fireplace" } },
+  "media_player.living_room_apple_tv": { state: "off", last_changed: iso(9000), attributes: {
+    friendly_name: "Living room - Apple TV", supported_features: FULL } },
+  "media_player.living_room_tv": { state: "off", last_changed: iso(9000), attributes: {
+    friendly_name: "Living room tv", supported_features: FULL } },
+};
+
+const tvStates = {
+  ...musicStates,
+  "media_player.fireplace": { state: "paused", last_changed: iso(600), attributes: {
+    friendly_name: "Fireplace - (Sonos)", supported_features: FULL,
+    media_title: "Radio 6 Music", media_channel: "BBC Radio 6", volume_level: 0.21 } },
+  "media_player.living_room_apple_tv": { state: "playing", last_changed: iso(20), attributes: {
+    friendly_name: "Living room - Apple TV", supported_features: FULL,
+    media_title: "The Bear", media_series_title: "The Bear", media_season: 3, media_episode: 4,
+    app_name: "Disney+", media_duration: 2040, media_position: 735,
+    media_position_updated_at: iso(12), volume_level: 0.6, entity_picture: ART } },
+};
+
+function mount(paneClass, caption, dark, states) {
+  const pane = document.createElement("div");
+  pane.className = "pane " + paneClass;
+  const cap = document.createElement("div");
+  cap.className = "caption";
+  cap.textContent = caption;
+  pane.appendChild(cap);
+  const card = document.createElement("wabit-media-card");
+  pane.appendChild(card);
+  document.body.appendChild(pane);
+  card.setConfig({ area: "living_room" });
+  card.hass = { ...base, themes: { darkMode: dark }, states };
+}
+
+mount("light", "Music playing on the Sonos", false, musicStates);
+mount("dark", "Apple TV takes over the room", true, tvStates);
+</script>
+</body></html>

@@ -326,7 +326,7 @@ eq("empty state explained", ed._els.list.children[0].classList.contains("empty-p
 
 // The add picker offers the room's other lights, minus whatever is already pinned.
 const sel = ed._els.add.children[0];
-eq("add control is a select here", sel.tagName, "select");
+eq("add control is a select here", sel.tagName, "SELECT");
 // Sorted by label: "Living Room - Ceiling All" collates before "Living Room Accent".
 eq("offers every area light when none pinned",
    sel.children.slice(1).map((o) => o.value),

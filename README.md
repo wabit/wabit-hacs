@@ -6,6 +6,7 @@ each time.
 
 | Card | What it does |
 | --- | --- |
+| `wabit-media-card` | What is playing in a room, across speakers, TVs and streamers, with the active one brought to the front. |
 | `wabit-bin-collection-card` | Upcoming bin collections, grouped by day so bins that go out together read as one collection. |
 | `wabit-room-lights-card` | Every light in a room, found automatically from its area: pin the ones you use, tuck the rest behind "Show more", with brightness and colour per light. |
 | `wabit-wakeup-card` | Control a sunrise-style wake-up light: set the time per schedule, toggle each schedule on or off, choose which light wakes you, and drag a shared fade length — with a live sunrise ramp while it runs. Set-once options tuck behind a settings button. |
@@ -31,6 +32,61 @@ type: module
 ```
 
 Then add the card from the dashboard card picker ("Wabit Wakeup"), or paste YAML.
+
+## `wabit-media-card`
+
+![Media card, music and television](https://raw.githubusercontent.com/wabit/wabit-hacs-dashboard/main/docs/preview-media.png)
+
+```yaml
+type: custom:wabit-media-card
+area: living_room
+```
+
+Point it at a room and it finds the media players there — speakers, TVs, streamers —
+and brings whatever is actually playing to the front, with artwork, progress, transport
+controls and volume. Everything else in the room is listed underneath; tap one to take
+it over.
+
+### Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | string | **required** | `custom:wabit-media-card` |
+| `area` | string | **required*** | Area id, name or alias. *Not required if `entities` is given. |
+| `entities` | list | – | Specific players, skipping discovery entirely. |
+| `exclude` | list | – | Players in the room to leave out. |
+| `exclude_platforms` | list | `[sonos_cloud, unifiprotect]` | Integrations to ignore. See below. |
+| `title` | string | the room name | Card header. |
+| `idle_text` | string | `Nothing playing` | Shown when nothing in the room is active. |
+| `show_volume` | boolean | `true` | Volume slider and mute. |
+| `show_progress` | boolean | `true` | Progress bar and times. |
+| `show_others` | boolean | `true` | The room's other players underneath. |
+| `show_header` | boolean | `true` | The room name. |
+
+### One speaker, several integrations
+
+A room usually holds fewer devices than it holds `media_player` entities. A single Sonos
+can appear three times — once from the Sonos integration, again from `sonos_cloud`, and
+again through SmartThings — and a Plex client adds another entity per app.
+
+Two things keep that under control. `sonos_cloud` and `unifiprotect` are ignored by
+default, because neither ever reports what is playing: the first exists only to send
+announcements, the second is a camera intercom. More importantly, the card features
+whatever is **active**, and the duplicates are invariably idle, so they fall to the
+bottom of the list on their own rather than needing to be hunted down. Add anything that
+still gets in the way to `exclude`.
+
+### What gets featured
+
+Players are ranked: playing, then paused, then on-with-media, on, idle, off, and finally
+unavailable. Ties go to whichever changed most recently — if two things are playing, the
+one you just started is the one you meant. Tapping a player in the list overrides that
+until you pick another.
+
+Transport buttons follow each player's own `supported_features`, so a streamer that
+cannot skip tracks shows those buttons greyed rather than pretending. Progress is
+recomputed from `media_position` and the timestamp Home Assistant reports it against, so
+the bar keeps moving between state updates instead of jumping.
 
 ## `wabit-bin-collection-card`
 
@@ -374,13 +430,13 @@ node --check dist/wabit-cards.js   # parses
 node test/card.test.mjs            # wakeup card
 node test/room-card.test.mjs       # room lights card
 node test/bin-card.test.mjs        # bin collection card
+node test/media-card.test.mjs      # media card
 ```
 
 Both suites share `test/dom-stub.mjs`, which stubs just enough of the DOM to load the
 bundle in node and drive the real render paths.
 
-`test/preview.html`, `test/preview-room.html` and `test/preview-bin.html` render the cards
-outside Home Assistant, with stand-ins for
+The `test/preview-*.html` pages render the cards outside Home Assistant, with stand-ins for
 `ha-card` / `ha-icon` / `ha-switch` and Material You tokens, on a pinned clock so the
 states stay stable. It is what `docs/preview.png` is captured from - open it in a browser,
 or screenshot it headlessly:

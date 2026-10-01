@@ -12,7 +12,9 @@ function mkEl(tag) {
   const classes = new Set();
   const handlers = {};
   const el = {
-    tagName: tag,
+    // Matches the DOM: tagName comes back upper case.
+    tagName: String(tag).toUpperCase(),
+    localName: tag,
     children: [],
     _handlers: handlers,
     textContent: "",
@@ -91,6 +93,10 @@ const EXPORTS = [
   "parseDMY", "daysUntil", "relativeDays", "formatBinDate", "DEFAULT_BINS",
   "discoverBinSensors", "commonWordPrefix", "stripBinSize", "applyCase",
   "WabitBinCollectionCard", "WabitBinCollectionCardEditor",
+  // media card
+  "mediaPlayersInArea", "mediaRank", "formatDuration", "mediaPosition",
+  "mediaSubtitle", "mediaTitle", "MEDIA_NOISE_PLATFORMS",
+  "WabitMediaCard", "WabitMediaCardEditor",
 ];
 
 export { mkEl, mkShadow };
