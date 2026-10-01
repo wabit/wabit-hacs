@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.8.0";
+const VERSION = "1.9.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -1026,6 +1026,28 @@ const EDITOR_STYLES = `
     color: var(--primary-text-color); font-size: 0.9rem;
   }
   .note a { color: var(--primary-color); }
+  .section { margin: 16px 0 4px; }
+  .section-title {
+    font-size: 0.95rem; font-weight: 600; color: var(--primary-text-color);
+    margin-bottom: 2px;
+  }
+  .hint {
+    font-size: 0.78rem; color: var(--secondary-text-color);
+    line-height: 1.45; margin-bottom: 8px;
+  }
+  .preset-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+  .preset-row { display: flex; align-items: center; gap: 6px; }
+  .preset-row input[type="text"] {
+    min-width: 0; font: inherit; font-size: 0.85rem; padding: 7px 9px;
+    border-radius: 9px; border: 1px solid var(--divider-color);
+    background: var(--card-background-color); color: var(--primary-text-color);
+  }
+  .pin-btn {
+    flex: none; width: 30px; height: 30px; padding: 0; border: none;
+    border-radius: 50%; background: none; cursor: pointer; font: inherit;
+    font-size: 1rem; line-height: 1; color: var(--secondary-text-color);
+  }
+  .pin-btn.danger:hover { background: rgba(219, 68, 55, 0.14); color: var(--error-color, #db4437); }
 `;
 
 class WabitWakeupCardEditor extends HTMLElement {
@@ -3439,6 +3461,40 @@ const MEDIA_STYLES = `
   }
   .other.dim .other-name { color: var(--wc-muted); }
 
+  /* ---------------------------------------------------------- presets */
+  .presets {
+    display: flex; gap: 10px; margin-top: 12px; padding-bottom: 2px;
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .presets::-webkit-scrollbar { display: none; }
+  .presets.hidden { display: none; }
+  .preset {
+    flex: none; width: 64px; padding: 0; border: none; background: none;
+    cursor: pointer; font: inherit; color: var(--wc-text);
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+  }
+  .preset-art {
+    width: 58px; height: 58px; border-radius: 12px;
+    background: var(--wc-tonal) center/cover no-repeat;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14);
+    outline: 2px solid transparent; outline-offset: 2px;
+    transition: outline-color 180ms, transform 160ms;
+  }
+  .preset:hover .preset-art { transform: scale(1.05); }
+  .preset:focus-visible .preset-art { outline-color: var(--wc-accent); }
+  .preset.on .preset-art { outline-color: var(--wc-accent); }
+  .preset-art .icon { color: var(--wc-muted); --mdc-icon-size: 24px; }
+  .preset-art.has-art .icon { display: none; }
+  .preset-name {
+    font-size: 0.7rem; line-height: 1.25; text-align: center; color: var(--wc-muted);
+    width: 100%; overflow: hidden;
+    /* Two lines rather than an ellipsis: "Def Con Radio" should not become
+       "Def Con R...". */
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .preset.on .preset-name { color: var(--wc-accent); font-weight: 600; }
+
   .idle, .error { font-size: 0.9rem; line-height: 1.5; padding: 4px 0 2px; }
   .idle { color: var(--wc-muted); }
   .error { color: var(--error-color, #db4437); }
@@ -3490,6 +3546,7 @@ class WabitMediaCard extends HTMLElement {
       show_progress: cfg.show_progress !== false,
       show_others: cfg.show_others !== false,
       idle_text: cfg.idle_text || "Nothing playing",
+      presets: this._readPresets(cfg.presets),
     };
 
     this._built = false;
@@ -3497,6 +3554,40 @@ class WabitMediaCard extends HTMLElement {
     this._selected = null;
     if (this.shadowRoot) this.shadowRoot.innerHTML = "";
     if (this._hass) this._render();
+  }
+
+  /** One-tap shortcuts: a radio station, a scene, anything worth a button. */
+  _readPresets(raw) {
+    if (raw === undefined || raw === null) return [];
+    if (!Array.isArray(raw)) {
+      throw new Error("wabit-media-card: `presets` must be a list");
+    }
+    return raw.map((p, i) => {
+      if (!p || typeof p !== "object") {
+        throw new Error(`wabit-media-card: presets[${i}] must be an object`);
+      }
+      if (!p.entity && !p.service) {
+        throw new Error(
+          `wabit-media-card: presets[${i}] needs an \`entity\` to trigger or a \`service\` to call`
+        );
+      }
+      if (p.service && !/^[a-z_]+\.[a-z0-9_]+$/.test(String(p.service))) {
+        throw new Error(
+          `wabit-media-card: presets[${i}].service must look like "domain.service"`
+        );
+      }
+      return {
+        name: p.name || p.entity || p.service,
+        image: p.image || null,
+        icon: p.icon || "mdi:radio",
+        entity: p.entity || null,
+        service: p.service || null,
+        data: p.data || null,
+        target: p.target || null,
+        // What to look for in the current title to show this one as playing.
+        match: p.match === undefined ? p.name || null : p.match,
+      };
+    });
   }
 
   set hass(hass) {
@@ -3596,7 +3687,44 @@ class WabitMediaCard extends HTMLElement {
     }
 
     this._renderNowPlaying(m);
+    this._renderPresets(m);
     this._renderOthers(m);
+  }
+
+  _renderPresets(m) {
+    const e = this._els;
+    const presets = this._config.presets;
+    e.presets.classList.toggle("hidden", !presets.length);
+    if (!presets.length) return;
+
+    if (!e.presetEls || e.presetEls.length !== presets.length) {
+      e.presets.innerHTML = "";
+      e.presetEls = presets.map((p) => {
+        const btn = document.createElement("button");
+        btn.className = "preset";
+        btn.type = "button";
+        btn.title = p.name;
+        btn.setAttribute("aria-label", `Play ${p.name}`);
+        const art = document.createElement("div");
+        art.className = "preset-art";
+        art.appendChild(this._makeIcon(p.icon));
+        if (p.image) {
+          art.style.backgroundImage = `url("${p.image}")`;
+          art.classList.add("has-art");
+        }
+        const name = document.createElement("div");
+        name.className = "preset-name";
+        name.textContent = p.name;
+        btn.append(art, name);
+        btn.addEventListener("click", () => this._runPreset(p));
+        e.presets.appendChild(btn);
+        return { p, btn };
+      });
+    }
+
+    e.presetEls.forEach(({ p, btn }) => {
+      btn.classList.toggle("on", this._presetActive(p, m.featured));
+    });
   }
 
   _renderNowPlaying(m) {
@@ -3764,6 +3892,34 @@ class WabitMediaCard extends HTMLElement {
     return "mdi:speaker";
   }
 
+  _runPreset(p) {
+    if (p.service) {
+      const dot = p.service.indexOf(".");
+      this._hass.callService(
+        p.service.slice(0, dot),
+        p.service.slice(dot + 1),
+        p.data || {},
+        p.target || undefined
+      );
+      return;
+    }
+    const domain = p.entity.slice(0, p.entity.indexOf("."));
+    const service =
+      domain === "automation" ? "trigger"
+        : domain === "script" || domain === "scene" ? "turn_on"
+        : "turn_on";
+    this._hass.callService(domain, service, { entity_id: p.entity, ...(p.data || {}) });
+  }
+
+  /** A preset counts as playing when its match text is in the current title. */
+  _presetActive(p, featured) {
+    if (!p.match || !featured) return false;
+    const st = featured.st;
+    if (!ACTIVE_STATES.has(st.state)) return false;
+    const hay = `${mediaTitle(st)} ${mediaSubtitle(st)}`.toLowerCase();
+    return hay.includes(String(p.match).toLowerCase());
+  }
+
   _call(service, data) {
     const f = this._lastModel && this._lastModel.featured;
     if (!f) return;
@@ -3881,6 +4037,10 @@ class WabitMediaCard extends HTMLElement {
     controls.append(prev.b, play.b, next.b, spacer, vol);
     body.appendChild(controls);
 
+    const presets = document.createElement("div");
+    presets.className = "presets hidden";
+    body.appendChild(presets);
+
     const others = document.createElement("div");
     others.className = "others";
     body.appendChild(others);
@@ -3889,7 +4049,8 @@ class WabitMediaCard extends HTMLElement {
       error, idle, now, art, eyebrow, track, sub, where,
       progress, fill, elapsed, total,
       controls, prev: prev.b, play: play.b, playIcon: play.ic, next: next.b,
-      vol, mute: mute.b, muteIcon: mute.ic, volume, others, otherRows: [],
+      vol, mute: mute.b, muteIcon: mute.ic, volume,
+      presets, presetEls: null, others, otherRows: [],
     });
     this._built = true;
   }
@@ -3925,6 +4086,7 @@ class WabitMediaCardEditor extends HTMLElement {
   setConfig(config) {
     this._config = { ...(config || {}) };
     if (!this._built) this._build();
+    this._renderPresets();
     this._push();
   }
 
@@ -3968,8 +4130,95 @@ class WabitMediaCardEditor extends HTMLElement {
       fireEvent(this, "config-changed", { config: this._config });
     });
     root.appendChild(form);
+
+    const section = document.createElement("div");
+    section.className = "section";
+    const title = document.createElement("div");
+    title.className = "section-title";
+    title.textContent = "Presets";
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    hint.textContent =
+      "One-tap shortcuts shown under the player - a radio station, a scene, " +
+      "anything worth a button. Each runs an automation, script or scene.";
+    const list = document.createElement("div");
+    list.className = "preset-list";
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "btn add";
+    add.textContent = "+ Add preset";
+    add.addEventListener("click", () => this._addPreset());
+    section.append(title, hint, list, add);
+    root.appendChild(section);
+
     this._form = form;
+    this._els = { list };
     this._built = true;
+  }
+
+  _presets() {
+    return Array.isArray(this._config.presets) ? this._config.presets : [];
+  }
+
+  _setPresets(list) {
+    const next = { ...this._config };
+    if (list.length) next.presets = list;
+    else delete next.presets;
+    this._config = next;
+    fireEvent(this, "config-changed", { config: this._config });
+    this._renderPresets(true);
+  }
+
+  _addPreset() {
+    this._setPresets(this._presets().concat([{ name: "", entity: "" }]));
+  }
+
+  _renderPresets(force) {
+    if (!this._built || !this._els) return;
+    const presets = this._presets();
+    // Rebuilding while someone is typing would steal focus, so only when the
+    // number of rows actually changes.
+    if (!force && this._presetCount === presets.length) return;
+    this._presetCount = presets.length;
+
+    const list = this._els.list;
+    list.innerHTML = "";
+    presets.forEach((p, i) => {
+      const row = document.createElement("div");
+      row.className = "preset-row";
+
+      const mkField = (key, placeholder, width) => {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.placeholder = placeholder;
+        input.value = p[key] === undefined || p[key] === null ? "" : String(p[key]);
+        if (width) input.style.flex = width;
+        input.addEventListener("change", () => {
+          const next = this._presets().slice();
+          next[i] = { ...next[i], [key]: input.value };
+          this._setPresets(next);
+        });
+        return input;
+      };
+
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "pin-btn danger";
+      del.textContent = "\u2715";
+      del.title = "Remove";
+      del.setAttribute("aria-label", "Remove preset");
+      del.addEventListener("click", () =>
+        this._setPresets(this._presets().filter((_, j) => j !== i))
+      );
+
+      row.append(
+        mkField("name", "Name", "1 1 90px"),
+        mkField("entity", "automation.play_something", "2 1 160px"),
+        mkField("image", "/local/art.png", "1 1 110px"),
+        del
+      );
+      list.appendChild(row);
+    });
   }
 
   _push() {

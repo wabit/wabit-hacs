@@ -82,7 +82,7 @@ const hass = {
       supported_features: LIMITED,
     }, 900),
   },
-  callService: (d, s, data) => calls.push([d, s, data]),
+  callService: (d, s, data, target) => calls.push([d, s, data, target]),
 };
 
 const mk = (cfg) => {
@@ -183,20 +183,20 @@ eq("series subtitle rendered", limited._els.sub.textContent, "Friends · S1E2");
 
 /* ---------------------------------------------------------- interactions */
 lr._els.play._fire("click");
-eq("play/pause call", calls.at(-1),
+eq("play/pause call", calls.at(-1).slice(0, 3),
    ["media_player", "media_play_pause", { entity_id: "media_player.fireplace" }]);
 lr._els.next._fire("click");
-eq("next call", calls.at(-1),
+eq("next call", calls.at(-1).slice(0, 3),
    ["media_player", "media_next_track", { entity_id: "media_player.fireplace" }]);
 lr._els.prev._fire("click");
-eq("previous call", calls.at(-1),
+eq("previous call", calls.at(-1).slice(0, 3),
    ["media_player", "media_previous_track", { entity_id: "media_player.fireplace" }]);
 lr._els.volume.value = "40";
 lr._els.volume._fire("change");
-eq("volume call", calls.at(-1),
+eq("volume call", calls.at(-1).slice(0, 3),
    ["media_player", "volume_set", { entity_id: "media_player.fireplace", volume_level: 0.4 }]);
 lr._els.mute._fire("click");
-eq("mute call", calls.at(-1),
+eq("mute call", calls.at(-1).slice(0, 3),
    ["media_player", "volume_mute",
     { entity_id: "media_player.fireplace", is_volume_muted: true }]);
 
@@ -248,6 +248,96 @@ eq("listed in the picker",
    window.customCards.some((c) => c.type === "wabit-media-card"), true);
 
 
+
+/* ---------------------------------------------------------- presets ---
+   One-tap shortcuts, matching the radio-station buttons that used to sit
+   under the player as a horizontal-stack of button-cards. */
+const PRESETS = [
+  { name: "6 Music", image: "/local/6-music.png",
+    entity: "automation.living_room_play_6_music" },
+  { name: "Def Con Radio", image: "/local/defcon-radio.png",
+    entity: "automation.living_room_play_def_con_radio" },
+];
+const pre = mk({ area: "living_room", presets: PRESETS });
+
+eq("no presets row without presets", lr._els.presets.classList.contains("hidden"), true);
+eq("presets row shown", pre._els.presets.classList.contains("hidden"), false);
+eq("one button per preset", pre._els.presetEls.length, 2);
+eq("preset name", pre._els.presetEls[0].btn.children[1].textContent, "6 Music");
+eq("preset artwork applied",
+   pre._els.presetEls[0].btn.children[0].classList.contains("has-art"), true);
+
+let n = calls.length;
+pre._els.presetEls[0].btn._fire("click");
+eq("automation preset triggers", calls.at(-1).slice(0, 3),
+   ["automation", "trigger", { entity_id: "automation.living_room_play_6_music" }]);
+
+const kinds = mk({ area: "living_room", presets: [
+  { name: "Script", entity: "script.evening" },
+  { name: "Scene", entity: "scene.movie" },
+  { name: "Direct", service: "media_player.play_media",
+    data: { media_content_id: "FV:2/31", media_content_type: "favorite_item_id" },
+    target: { entity_id: "media_player.fireplace" } },
+]});
+kinds._els.presetEls[0].btn._fire("click");
+eq("script preset turns on", calls.at(-1).slice(0, 3),
+   ["script", "turn_on", { entity_id: "script.evening" }]);
+kinds._els.presetEls[1].btn._fire("click");
+eq("scene preset turns on", calls.at(-1).slice(0, 3),
+   ["scene", "turn_on", { entity_id: "scene.movie" }]);
+kinds._els.presetEls[2].btn._fire("click");
+eq("explicit service preset", calls.at(-1), [
+  "media_player", "play_media",
+  { media_content_id: "FV:2/31", media_content_type: "favorite_item_id" },
+  { entity_id: "media_player.fireplace" },
+]);
+
+/* The preset playing right now is marked, by matching the title. */
+// Paused still counts: the station is loaded, it is just not sounding.
+eq("a paused station still marks its preset",
+   pre._els.presetEls[0].btn.classList.contains("on"), true);
+eq("an off player marks nothing",
+   mk({ area: "living_room", exclude: ["media_player.fireplace"], presets: PRESETS })
+     ._els.presetEls[0].btn.classList.contains("on"), false);
+const playingRadio = { ...hass, states: { ...hass.states,
+  "media_player.fireplace": { ...hass.states["media_player.fireplace"], state: "playing" } } };
+const livePre = new T.WabitMediaCard();
+livePre.setConfig({ area: "living_room", presets: PRESETS });
+livePre.hass = playingRadio;
+eq("playing preset marked", livePre._els.presetEls[0].btn.classList.contains("on"), true);
+eq("the other preset is not", livePre._els.presetEls[1].btn.classList.contains("on"), false);
+
+const custom = new T.WabitMediaCard();
+custom.setConfig({ area: "living_room", presets: [
+  { name: "Anything", entity: "automation.x", match: "teardrop" },
+  { name: "Never", entity: "automation.y", match: null },
+]});
+custom.hass = playingRadio;
+eq("explicit match that misses", custom._els.presetEls[0].btn.classList.contains("on"), false);
+eq("match null never marks", custom._els.presetEls[1].btn.classList.contains("on"), false);
+
+const subMatch = new T.WabitMediaCard();
+subMatch.setConfig({ area: "office", presets: [{ name: "Mezzanine", entity: "automation.z" }] });
+subMatch.hass = hass;
+eq("match looks at the subtitle too",
+   subMatch._els.presetEls[0].btn.classList.contains("on"), true);
+
+eq("preset defaults to a radio icon",
+   mk({ area: "living_room", presets: [{ name: "X", entity: "automation.x" }] })
+     ._config.presets[0].icon, "mdi:radio");
+eq("a preset with no image shows the icon",
+   mk({ area: "living_room", presets: [{ name: "X", entity: "automation.x" }] })
+     ._els.presetEls[0].btn.children[0].classList.contains("has-art"), false);
+
+throws("presets must be a list",
+  () => new T.WabitMediaCard().setConfig({ area: "x", presets: {} }), "must be a list");
+throws("a preset needs something to do",
+  () => new T.WabitMediaCard().setConfig({ area: "x", presets: [{ name: "X" }] }),
+  "needs an `entity` to trigger or a `service` to call");
+throws("service must be domain.service",
+  () => new T.WabitMediaCard().setConfig({ area: "x", presets: [{ name: "X", service: "nope" }] }),
+  'must look like "domain.service"');
+
 /* --------------------------------------------- icons must actually change --
    The DOM reports tagName upper case, so a `=== "ha-icon"` check never matched
    and the play/pause glyph silently stopped updating in real browsers. */
@@ -269,6 +359,39 @@ const dcCard = mk({ entities: ["media_player.fireplace", "media_player.tv_dc"] }
 eq("a tv gets a television icon",
    dcCard._els.otherRows[0].row.children[0].getAttribute("icon"), "mdi:television");
 delete customElements._d["ha-icon"];
+
+
+/* -------------------------------------------------------- presets editor */
+customElements.define("ha-form", class {});
+const ed = new T.WabitMediaCardEditor();
+const emitted = [];
+ed.addEventListener("config-changed", (ev) => emitted.push(ev.detail.config));
+ed.setConfig({ area: "living_room", presets: PRESETS });
+ed.hass = hass;
+
+eq("a row per preset", ed._els.list.children.length, 2);
+eq("name field filled", ed._els.list.children[0].children[0].value, "6 Music");
+eq("entity field filled", ed._els.list.children[0].children[1].value,
+   "automation.living_room_play_6_music");
+eq("image field filled", ed._els.list.children[0].children[2].value, "/local/6-music.png");
+
+ed._els.list.children[0].children[0].value = "BBC 6 Music";
+ed._els.list.children[0].children[0]._fire("change");
+eq("editing a field emits", emitted.at(-1).presets[0].name, "BBC 6 Music");
+eq("editing one field keeps the others",
+   emitted.at(-1).presets[0].entity, "automation.living_room_play_6_music");
+eq("other presets untouched", emitted.at(-1).presets[1].name, "Def Con Radio");
+
+ed._addPreset();
+eq("adding appends a blank row", emitted.at(-1).presets.length, 3);
+eq("three rows now", ed._els.list.children.length, 3);
+
+ed._els.list.children[2].children[3]._fire("click");
+eq("removing drops it", emitted.at(-1).presets.length, 2);
+ed._els.list.children[1].children[3]._fire("click");
+ed._els.list.children[0].children[3]._fire("click");
+eq("emptying removes the key", "presets" in emitted.at(-1), false);
+delete customElements._d["ha-form"];
 
 globalThis.Date = RealDate;
 done("media");

@@ -62,6 +62,7 @@ it over.
 | `show_progress` | boolean | `true` | Progress bar and times. |
 | `show_others` | boolean | `true` | The room's other players underneath. |
 | `show_header` | boolean | `true` | The room name. |
+| `presets` | list | – | One-tap shortcuts under the player. See below. |
 
 ### One speaker, several integrations
 
@@ -75,6 +76,41 @@ announcements, the second is a camera intercom. More importantly, the card featu
 whatever is **active**, and the duplicates are invariably idle, so they fall to the
 bottom of the list on their own rather than needing to be hunted down. Add anything that
 still gets in the way to `exclude`.
+
+### Presets
+
+A row of one-tap shortcuts under the player — a radio station, a scene, anything worth a
+button:
+
+```yaml
+presets:
+  - name: 6 Music
+    image: /local/6-music.png
+    entity: automation.living_room_play_6_music
+  - name: Def Con Radio
+    image: /local/defcon-radio.png
+    entity: automation.living_room_play_def_con_radio
+```
+
+`entity` can be an `automation` (triggered), a `script` or a `scene` (turned on). For
+anything else, give a `service` instead with optional `data` and `target`:
+
+```yaml
+  - name: Groove Salad
+    icon: mdi:radio
+    service: media_player.play_media
+    target: { entity_id: media_player.fireplace }
+    data:
+      media_content_type: favorite_item_id
+      media_content_id: "FV:2/31"
+```
+
+`image` is optional; without one the preset shows `icon`, defaulting to `mdi:radio`.
+
+The preset matching what is playing is highlighted. By default the card looks for the
+preset's `name` in the current title or subtitle, so "6 Music" lights up while "Radio 6
+Music" is on — including when it is paused, since the station is still the loaded one.
+Set `match` to look for something else, or `match: null` to never highlight it.
 
 ### What gets featured
 
