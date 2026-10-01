@@ -6,7 +6,7 @@ each time.
 
 | Card | What it does |
 | --- | --- |
-| `wabit-wakeup-card` | Control a sunrise-style wake-up light: set the time per schedule, toggle each schedule on or off, and drag a shared fade length — with a live sunrise ramp while it runs. |
+| `wabit-wakeup-card` | Control a sunrise-style wake-up light: set the time per schedule, toggle each schedule on or off, choose which light wakes you, and drag a shared fade length — with a live sunrise ramp while it runs. |
 
 ![The wakeup card in light and dark Material You themes](https://raw.githubusercontent.com/wabit/wabit-hacs/main/docs/preview.png)
 
@@ -35,6 +35,7 @@ Then add the card from the dashboard card picker ("Wabit Wakeup"), or paste YAML
 ```yaml
 type: custom:wabit-wakeup-card
 title: Bedroom Wakeup
+light_entity: input_text.bedroom_wakeup_light
 fade_entity: input_number.bedroom_wakeup_fade
 schedules:
   - name: Weekday
@@ -55,6 +56,7 @@ schedules:
 | `schedules` | list | **required** | One entry per schedule. At least one is required. |
 | `title` | string | `Wakeup` | Card header. Set to `""` for no header. |
 | `fade_entity` | entity | – | An `input_number` holding the fade length **in minutes**. Omit it to hide the fade row. |
+| `light_entity` | entity | – | An `input_text` or `input_select` holding the **entity id of the light** to wake you. Omit it to hide the light row. See below. |
 | `fade_mode` | `start` \| `finish` | `start` | Whether each schedule's time is when the fade *starts* or when the light is *fully on*. See below. |
 | `show_hero` | boolean | `true` | The large next-wakeup panel at the top. |
 | `show_ramp` | boolean | `true` | The sunrise gradient bar. |
@@ -77,6 +79,16 @@ has to be given explicitly: the card can read your automation's on/off state, bu
 see the weekday condition inside it. Rather than guess and promise a wake-up that never
 fires, the countdown stays hidden until every schedule declares its days. Keep them in step
 with the conditions in your automations.
+
+### Choosing the light
+
+`light_entity` does not point at a light. It points at an `input_text` (or `input_select`)
+whose *value* is a light's entity id, and the card renders a light picker that writes to it.
+That indirection is what makes the choice live: your automation reads the same helper, so
+picking a different light on the dashboard changes what actually turns on, with no YAML edit.
+
+The card will not let you clear the helper, because an empty value would quietly send the
+automation to its fallback light.
 
 ### `fade_mode`
 
@@ -112,6 +124,16 @@ bedroom_weekday_wakeup_time:
   icon: mdi:weather-sunset-up
 ```
 
+`input_text.yaml`:
+
+```yaml
+bedroom_wakeup_light:
+  name: Bedroom Wakeup Light
+  max: 255
+  mode: text
+  icon: mdi:lightbulb-on-outline
+```
+
 `input_number.yaml`:
 
 ```yaml
@@ -142,12 +164,19 @@ And the automation, taking both its time and its fade length from the helpers:
   actions:
     - action: light.turn_on
       target:
-        entity_id: light.bedroom_ceiling_light
+        entity_id: >-
+          {% set e = states('input_text.bedroom_wakeup_light') %}
+          {{ e if e.startswith('light.') else 'light.bedroom_ceiling_light' }}
       data:
         transition: >-
           {{ (states('input_number.bedroom_wakeup_fade') | float(5) * 60) | round(0) | int }}
   mode: single
 ```
+
+`target.entity_id` is templated, so the automation picks up whatever light the helper holds
+at the moment it fires. The `else` branch matters: if the helper is ever empty or holds
+something that is not a light, the automation still turns *a* light on rather than erroring
+out. For an alarm, falling back beats failing silently — pick a sensible default there.
 
 Long fades lean on the light's own transition handling. Most Zigbee and Hue bulbs are fine up
 to about 30 minutes; if a long fade looks steppy or stalls, drive the brightness in a `repeat`

@@ -68,6 +68,8 @@ customElements.define("ha-card", class extends HTMLElement {
 const ICONS = {
   "mdi:weather-sunset-up":
     "M12 4.5l4 4.2h-2.9v3.1h-2.2V8.7H8l4-4.2zM12 13.4a3.3 3.3 0 013.3 3.3H8.7A3.3 3.3 0 0112 13.4zM2 18.6h20v1.7H2zM4.6 14.2l1.2 1.2-1.2 1.2-1.2-1.2zM19.4 14.2l1.2 1.2-1.2 1.2-1.2-1.2z",
+  "mdi:lightbulb-on-outline":
+    "M12 2.5a6.5 6.5 0 00-3.8 11.8c.5.4.8.9.8 1.5v.7c0 .6.4 1 1 1h4c.6 0 1-.4 1-1v-.7c0-.6.3-1.1.8-1.5A6.5 6.5 0 0012 2.5zm0 1.8a4.7 4.7 0 012.7 8.5c-.6.5-1.1 1-1.4 1.7h-2.6c-.3-.7-.8-1.2-1.4-1.7A4.7 4.7 0 0112 4.3zM9.5 19h5c0 .8-.7 1.5-1.5 1.5h-2c-.8 0-1.5-.7-1.5-1.5z",
   "mdi:timer-sand":
     "M6 2h12v2.5c0 1.6-1.1 3-2.8 4.1L13.6 12l1.6 3.4C16.9 16.5 18 17.9 18 19.5V22H6v-2.5c0-1.6 1.1-3 2.8-4.1L10.4 12 8.8 8.6C7.1 7.5 6 6.1 6 4.5V2z",
 };
@@ -80,6 +82,35 @@ customElements.define("ha-icon", class extends HTMLElement {
       '<style>:host{display:inline-flex;width:var(--mdc-icon-size,24px);' +
       'height:var(--mdc-icon-size,24px);}svg{width:100%;height:100%;fill:currentColor;}</style>' +
       '<svg viewBox="0 0 24 24"><path d="' + d + '"></path></svg>';
+  }
+});
+
+customElements.define("ha-entity-picker", class extends HTMLElement {
+  constructor() {
+    super();
+    const sr = this.attachShadow({ mode: "open" });
+    sr.innerHTML =
+      '<style>:host{display:block;}' +
+      '.f{display:flex;align-items:center;gap:8px;background:var(--md-sys-color-surface-container-highest,#e6e0e9);' +
+      'border-radius:999px;padding:7px 12px;font-size:0.95rem;' +
+      'color:var(--md-sys-color-on-surface,var(--primary-text-color));}' +
+      '.v{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '.c{opacity:.6;font-size:0.7rem;}</style>' +
+      '<div class="f"><span class="v"></span><span class="c">&#9660;</span></div>';
+    this._vEl = sr.querySelector(".v");
+  }
+  connectedCallback() { this._paint(); }
+  set hass(h) { this._hass = h; this._paint(); }
+  set value(v) { this._value = v; this._paint(); }
+  get value() { return this._value; }
+  set disabled(v) { this._disabled = !!v; }
+  get disabled() { return this._disabled; }
+  _paint() {
+    if (!this._vEl) return;
+    const st = this._hass && this._value ? this._hass.states[this._value] : null;
+    this._vEl.textContent = st
+      ? (st.attributes.friendly_name || this._value)
+      : (this._value || "");
   }
 });
 
@@ -139,6 +170,10 @@ function makeHass(dark, weekdayTime) {
       "input_number.bedroom_wakeup_fade": { state: "5.0", attributes: { min: 1, max: 60, step: 1 } },
       "automation.bedroom_weekday_wakeup": { state: "on", attributes: {} },
       "automation.bedroom_weekend_wakeup": { state: "off", attributes: {} },
+      "input_text.bedroom_wakeup_light": { state: "light.bedroom_ceiling_light", attributes: {} },
+      "light.bedroom_ceiling_light": { state: "on",
+        attributes: { friendly_name: "Bedroom ceiling light", brightness: 102 } },
+      "light.bedside_lamp": { state: "off", attributes: { friendly_name: "Bedside lamp" } },
     },
     callService: () => {},
   };
@@ -147,6 +182,7 @@ function makeHass(dark, weekdayTime) {
 const CONFIG = {
   type: "custom:wabit-wakeup-card",
   title: "Bedroom Wakeup",
+  light_entity: "input_text.bedroom_wakeup_light",
   fade_entity: "input_number.bedroom_wakeup_fade",
   schedules: [
     { name: "Weekday", time: "input_datetime.bedroom_weekday_wakeup_time",

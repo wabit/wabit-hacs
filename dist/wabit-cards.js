@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 const REPO = "https://github.com/wabit/wabit-hacs";
 
 console.info(
@@ -239,6 +239,15 @@ const STYLES = `
     font-size: 0.85rem; min-width: 3.6em; text-align: right;
   }
 
+  .light-row { grid-template-columns: auto auto minmax(130px, 1fr); }
+  .light-row ha-entity-picker { width: 100%; display: block; }
+  select.light-select {
+    font: inherit; font-size: 0.95rem; width: 100%; cursor: pointer;
+    color: var(--wc-text); background: var(--wc-tonal);
+    border: none; border-radius: 999px; padding: 7px 12px;
+  }
+  select.light-select:disabled { opacity: 0.45; cursor: default; }
+
   .toggle { display: flex; align-items: center; }
   input.fallback-switch { accent-color: var(--wc-accent); width: 18px; height: 18px; }
 `;
@@ -257,6 +266,9 @@ class WabitWakeupCard extends HTMLElement {
     const fade = ids.find(
       (e) => e.startsWith("input_number.") && /fade|ramp|transition/.test(e)
     );
+    const lightHelper = ids.find(
+      (e) => /^(input_text|input_select)\./.test(e) && /light/.test(e) && wakeish(e)
+    );
 
     const pairFor = (time) => {
       const weekend = /weekend|sat|sun/.test(time);
@@ -272,6 +284,7 @@ class WabitWakeupCard extends HTMLElement {
 
     const schedules = times.length ? times.slice(0, 2).map(pairFor) : [{ name: "Wakeup" }];
     const stub = { type: "custom:wabit-wakeup-card", title: "Wakeup", schedules };
+    if (lightHelper) stub.light_entity = lightHelper;
     if (fade) stub.fade_entity = fade;
     return stub;
   }
@@ -297,10 +310,20 @@ class WabitWakeupCard extends HTMLElement {
     if (!isUnset(cfg.fade_entity) && !String(cfg.fade_entity).startsWith("input_number.")) {
       throw new Error("wabit-wakeup-card: `fade_entity` must be an input_number entity");
     }
+    if (
+      !isUnset(cfg.light_entity) &&
+      !/^(input_text|input_select)\./.test(String(cfg.light_entity))
+    ) {
+      throw new Error(
+        "wabit-wakeup-card: `light_entity` must be an input_text or input_select entity " +
+          "holding the chosen light's entity_id"
+      );
+    }
 
     this._config = {
       title: cfg.title === undefined ? "Wakeup" : cfg.title,
       fade_entity: isUnset(cfg.fade_entity) ? null : cfg.fade_entity,
+      light_entity: isUnset(cfg.light_entity) ? null : cfg.light_entity,
       fade_mode: cfg.fade_mode === "finish" ? "finish" : "start",
       show_hero: cfg.show_hero !== false,
       show_ramp: cfg.show_ramp !== false,
@@ -346,6 +369,7 @@ class WabitWakeupCard extends HTMLElement {
     return (
       (this._config.show_hero ? 2 : 0) +
       this._config.schedules.length +
+      (this._config.light_entity ? 1 : 0) +
       (this._config.fade_entity ? 1 : 0)
     );
   }
@@ -376,6 +400,24 @@ class WabitWakeupCard extends HTMLElement {
     return span;
   }
 
+  /** HA's entity picker when the frontend has it, otherwise a plain select. */
+  _makeLightPicker() {
+    if (customElements.get("ha-entity-picker")) {
+      const el = document.createElement("ha-entity-picker");
+      el.includeDomains = ["light"];
+      el.allowCustomEntity = false;
+      el.addEventListener("value-changed", (ev) => {
+        ev.stopPropagation();
+        this._onLightChange(ev.detail && ev.detail.value);
+      });
+      return { el, kind: "picker" };
+    }
+    const el = document.createElement("select");
+    el.className = "light-select";
+    el.addEventListener("change", () => this._onLightChange(el.value));
+    return { el, kind: "select" };
+  }
+
   _build() {
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     const root = this.shadowRoot;
@@ -393,7 +435,7 @@ class WabitWakeupCard extends HTMLElement {
     body.className = this._config.title ? "body tight" : "body";
     card.appendChild(body);
 
-    this._els = { hero: null, rows: [], fade: null };
+    this._els = { hero: null, rows: [], light: null, fade: null };
 
     if (this._config.show_hero) {
       const hero = document.createElement("div");
@@ -475,6 +517,28 @@ class WabitWakeupCard extends HTMLElement {
       this._els.rows.push({ sched, row, sub, timeInput, toggle });
     });
 
+    if (this._config.light_entity) {
+      const row = document.createElement("div");
+      row.className = "row light-row";
+
+      const icon = this._makeIcon("mdi:lightbulb-on-outline");
+
+      const label = document.createElement("div");
+      label.className = "label";
+      const name = document.createElement("div");
+      name.className = "name";
+      name.textContent = "Light";
+      const sub = document.createElement("div");
+      sub.className = "sub";
+      label.append(name, sub);
+
+      const { el, kind } = this._makeLightPicker();
+
+      row.append(icon, label, el);
+      body.appendChild(row);
+      this._els.light = { row, sub, picker: el, kind };
+    }
+
     if (this._config.fade_entity) {
       const row = document.createElement("div");
       row.className = "row fade-row";
@@ -535,6 +599,8 @@ class WabitWakeupCard extends HTMLElement {
     // Make the browser's native time picker follow the dashboard theme.
     const dark = !!(hass.themes && hass.themes.darkMode);
     this.style.colorScheme = dark ? "dark" : "light";
+
+    if (this._els.light) this._updateLightRow();
 
     if (this._els.fade) {
       const { row, slider, value, sub } = this._els.fade;
@@ -673,6 +739,79 @@ class WabitWakeupCard extends HTMLElement {
     }
   }
 
+  _updateLightRow() {
+    const hass = this._hass;
+    const { row, sub, picker, kind } = this._els.light;
+    const helper = hass.states[this._config.light_entity];
+
+    if (!helper) {
+      row.classList.add("missing");
+      sub.textContent = `${this._config.light_entity} is missing`;
+      picker.disabled = true;
+      return;
+    }
+    picker.disabled = false;
+
+    const chosen = isUnset(helper.state) ? "" : helper.state;
+    const light = chosen ? hass.states[chosen] : null;
+
+    if (kind === "picker") {
+      picker.hass = hass;
+      if (picker.value !== chosen) picker.value = chosen;
+    } else {
+      this._syncLightSelect(picker, chosen);
+    }
+
+    if (!chosen) {
+      sub.textContent = "no light chosen";
+    } else if (!light) {
+      sub.textContent = `${chosen} not found`;
+    } else {
+      const b = light.attributes && light.attributes.brightness;
+      const pct = b ? ` - ${Math.round((b / 255) * 100)}%` : "";
+      sub.textContent = light.state === "on" ? `on${pct}` : light.state;
+    }
+    row.classList.toggle("missing", !!chosen && !light);
+  }
+
+  /** Rebuild the fallback <select> only when the set of lights actually changes. */
+  _syncLightSelect(sel, chosen) {
+    const hass = this._hass;
+    const ids = Object.keys(hass.states).filter((e) => e.startsWith("light.")).sort();
+    if (chosen && !ids.includes(chosen)) ids.unshift(chosen);
+    const key = ids.join("|");
+    if (sel._key !== key) {
+      sel._key = key;
+      sel.innerHTML = "";
+      ids.forEach((id) => {
+        const opt = document.createElement("option");
+        opt.value = id;
+        const st = hass.states[id];
+        opt.textContent = (st && st.attributes && st.attributes.friendly_name) || id;
+        sel.appendChild(opt);
+      });
+    }
+    if (sel.value !== chosen) sel.value = chosen;
+  }
+
+  _onLightChange(value) {
+    const id = this._config.light_entity;
+    const helper = this._hass.states[id];
+    if (!helper) return;
+    const v = value === null || value === undefined ? "" : String(value);
+    // Ignore no-ops and refuse to clear: an empty helper would silently send the
+    // automation to its fallback light.
+    if (!v || v === helper.state) {
+      this._updateLightRow();
+      return;
+    }
+    if (id.startsWith("input_select.")) {
+      this._hass.callService("input_select", "select_option", { entity_id: id, option: v });
+    } else {
+      this._hass.callService("input_text", "set_value", { entity_id: id, value: v });
+    }
+  }
+
   _onTimeChange(sched, input) {
     const mins = timeToMinutes(input.value);
     if (mins === null || !sched.time) {
@@ -706,6 +845,7 @@ class WabitWakeupCard extends HTMLElement {
 const LABELS = {
   title: "Card title (leave empty for no header)",
   fade_entity: "Fade duration helper (input_number, minutes)",
+  light_entity: "Light chooser helper (input_text or input_select holding the light's entity_id)",
   fade_mode: "What the time means",
   show_hero: "Show the big next-wakeup panel",
   show_ramp: "Show the sunrise bar",
@@ -719,6 +859,10 @@ const LABELS = {
 const MAIN_SCHEMA = [
   { name: "title", selector: { text: {} } },
   { name: "fade_entity", selector: { entity: { domain: "input_number" } } },
+  {
+    name: "light_entity",
+    selector: { entity: { domain: ["input_text", "input_select"] } },
+  },
   {
     name: "fade_mode",
     selector: {
@@ -913,6 +1057,7 @@ class WabitWakeupCardEditor extends HTMLElement {
     const mainData = {
       title: this._config.title,
       fade_entity: this._config.fade_entity,
+      light_entity: this._config.light_entity,
       fade_mode: this._config.fade_mode === "finish" ? "finish" : "start",
       show_hero: this._config.show_hero !== false,
       show_ramp: this._config.show_ramp !== false,
@@ -945,8 +1090,8 @@ if (!window.customCards.some((c) => c.type === "wabit-wakeup-card")) {
     type: "wabit-wakeup-card",
     name: "Wabit Wakeup",
     description:
-      "Wake-up light schedule: per-schedule time and enable toggle, a shared fade " +
-      "slider, and a live sunrise ramp.",
+      "Wake-up light schedule: per-schedule time and enable toggle, a light " +
+      "chooser, a shared fade slider, and a live sunrise ramp.",
     preview: true,
     documentationURL: REPO,
   });

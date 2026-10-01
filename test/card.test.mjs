@@ -36,6 +36,8 @@ function mkEl(tag) {
       },
     },
     setAttribute(n, v) { el.attrs[n] = v; },
+    get innerHTML() { return ""; },
+    set innerHTML(_) { el.children.length = 0; },
     getAttribute(n) { return el.attrs[n]; },
     appendChild(c) { el.children.push(c); return c; },
     append(...cs) { cs.forEach((c) => el.children.push(c)); },
@@ -80,6 +82,13 @@ const eq = (label, got, want) => {
   if (g === w) { pass++; }
   else { fail++; console.log(`FAIL ${label}\n     got  ${g}\n     want ${w}`); }
 };
+const throws = (label, fn, frag) => {
+  try { fn(); fail++; console.log(`FAIL ${label} (no throw)`); }
+  catch (e) {
+    if (String(e.message).includes(frag)) pass++;
+    else { fail++; console.log(`FAIL ${label}: ${e.message}`); }
+  }
+};
 
 /* pure helpers */
 eq("time 06:55:00", T.timeToMinutes("06:55:00"), 415);
@@ -120,6 +129,11 @@ const hass = {
     "input_number.bedroom_wakeup_fade": { state: "5.0", attributes: { min: 1, max: 60, step: 1 } },
     "automation.bedroom_weekday_wakeup": { state: "on", attributes: {} },
     "automation.bedroom_weekend_wakeup": { state: "off", attributes: {} },
+    "input_text.bedroom_wakeup_light": { state: "light.bedroom_ceiling_light", attributes: {} },
+    "input_select.bedroom_wakeup_light": { state: "light.bedroom_ceiling_light", attributes: {} },
+    "light.bedroom_ceiling_light": {
+      state: "on", attributes: { friendly_name: "Bedroom ceiling light", brightness: 102 } },
+    "light.bedside_lamp": { state: "off", attributes: { friendly_name: "Bedside lamp" } },
   },
   callService: (d, s, data) => calls.push([d, s, data]),
 };
@@ -216,13 +230,6 @@ eq("no fade sub empty", card4._els.rows[0].sub.textContent, "");
 eq("no fade hides ramp", card4._els.hero.ramp.classList.contains("hidden"), true);
 
 /* config validation */
-const throws = (label, fn, frag) => {
-  try { fn(); fail++; console.log(`FAIL ${label} (no throw)`); }
-  catch (e) {
-    if (String(e.message).includes(frag)) pass++;
-    else { fail++; console.log(`FAIL ${label}: ${e.message}`); }
-  }
-};
 throws("empty schedules", () => new T.WabitWakeupCard().setConfig({ schedules: [] }), "at least one");
 throws("no schedules key", () => new T.WabitWakeupCard().setConfig({}), "at least one");
 throws("bad time domain",
@@ -244,6 +251,110 @@ eq("registered card", !!customElements.get("wabit-wakeup-card"), true);
 eq("registered editor", !!customElements.get("wabit-wakeup-card-editor"), true);
 eq("customCards entry", window.customCards[0].type, "wabit-wakeup-card");
 
+
+
+
+/* ------------------------------------------------------- light picker */
+const withLight = (over = {}) => ({ ...CONFIG, light_entity: "input_text.bedroom_wakeup_light", ...over });
+
+// No ha-entity-picker in this environment, so the <select> fallback is used.
+const lc = new T.WabitWakeupCard();
+lc.setConfig(withLight());
+lc.hass = hass;
+
+eq("light row exists", !!lc._els.light, true);
+eq("light picker kind", lc._els.light.kind, "select");
+eq("light card size", lc.getCardSize(), 6);
+eq("light sub shows state", lc._els.light.sub.textContent, "on - 40%");
+const opts = lc._els.light.picker.children.map((o) => [o.value, o.textContent]);
+eq("light options", opts, [
+  ["light.bedroom_ceiling_light", "Bedroom ceiling light"],
+  ["light.bedside_lamp", "Bedside lamp"],
+]);
+eq("light select value", lc._els.light.picker.value, "light.bedroom_ceiling_light");
+
+// Choosing a different light writes to the helper.
+let n = calls.length;
+lc._els.light.picker.value = "light.bedside_lamp";
+lc._els.light.picker._fire("change");
+eq("light change calls set_value", calls.at(-1),
+   ["input_text", "set_value",
+    { entity_id: "input_text.bedroom_wakeup_light", value: "light.bedside_lamp" }]);
+
+// Re-selecting the current value must not call the service again.
+n = calls.length;
+lc._els.light.picker.value = "light.bedroom_ceiling_light";
+lc._els.light.picker._fire("change");
+eq("light no-op makes no call", calls.length, n);
+
+// Clearing must be refused rather than silently sending the automation to its fallback.
+n = calls.length;
+lc._els.light.picker.value = "";
+lc._els.light.picker._fire("change");
+eq("clearing light makes no call", calls.length, n);
+eq("clearing light snaps back", lc._els.light.picker.value, "light.bedroom_ceiling_light");
+
+// The option list is rebuilt, not appended to, when hass changes.
+lc.hass = hass;
+eq("options not duplicated", lc._els.light.picker.children.length, 2);
+
+// An off light, and one that no longer exists.
+const hass2 = { ...hass, states: { ...hass.states,
+  "input_text.bedroom_wakeup_light": { state: "light.bedside_lamp", attributes: {} } } };
+lc.hass = hass2;
+eq("off light sub", lc._els.light.sub.textContent, "off");
+
+const hass3 = { ...hass, states: { ...hass.states,
+  "input_text.bedroom_wakeup_light": { state: "light.ghost", attributes: {} } } };
+lc.hass = hass3;
+eq("missing light sub", lc._els.light.sub.textContent, "light.ghost not found");
+eq("missing light flagged", lc._els.light.row.classList.contains("missing"), true);
+eq("unknown light still selectable", lc._els.light.picker.value, "light.ghost");
+
+// Helper itself absent.
+const lc2 = new T.WabitWakeupCard();
+lc2.setConfig(withLight({ light_entity: "input_text.nope" }));
+lc2.hass = hass;
+eq("absent helper sub", lc2._els.light.sub.textContent, "input_text.nope is missing");
+eq("absent helper disables picker", lc2._els.light.picker.disabled, true);
+
+// input_select helpers use select_option instead.
+const lc3 = new T.WabitWakeupCard();
+lc3.setConfig(withLight({ light_entity: "input_select.bedroom_wakeup_light" }));
+lc3.hass = hass;
+lc3._els.light.picker.value = "light.bedside_lamp";
+lc3._els.light.picker._fire("change");
+eq("input_select uses select_option", calls.at(-1),
+   ["input_select", "select_option",
+    { entity_id: "input_select.bedroom_wakeup_light", option: "light.bedside_lamp" }]);
+
+// With ha-entity-picker available the card uses it instead.
+customElements.define("ha-entity-picker", class {});
+const lc4 = new T.WabitWakeupCard();
+lc4.setConfig(withLight());
+lc4.hass = hass;
+eq("uses entity picker", lc4._els.light.kind, "picker");
+eq("picker domains", lc4._els.light.picker.includeDomains, ["light"]);
+eq("picker value synced", lc4._els.light.picker.value, "light.bedroom_ceiling_light");
+lc4._els.light.picker._handlers["value-changed"][0](
+  { stopPropagation() {}, detail: { value: "light.bedside_lamp" } });
+eq("picker change calls set_value", calls.at(-1),
+   ["input_text", "set_value",
+    { entity_id: "input_text.bedroom_wakeup_light", value: "light.bedside_lamp" }]);
+delete customElements._d["ha-entity-picker"];
+
+// No light configured -> no row at all.
+const lc5 = new T.WabitWakeupCard();
+lc5.setConfig(CONFIG);
+lc5.hass = hass;
+eq("no light row when unconfigured", lc5._els.light, null);
+
+throws("bad light helper domain",
+  () => new T.WabitWakeupCard().setConfig({ light_entity: "light.x", schedules: [{}] }),
+  "must be an input_text or input_select");
+
+eq("stub picks up light helper",
+   T.WabitWakeupCard.getStubConfig(hass).light_entity, "input_text.bedroom_wakeup_light");
 
 /* ---------------------------------- live fade, with the clock pinned */
 const RealDate = Date;
