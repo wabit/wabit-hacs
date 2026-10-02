@@ -116,6 +116,9 @@ const EXPORTS = [
   "airMoveGraph", "airMoveReading", "airSplitReading", "airSetWidth",
   "airLayoutShorthand",
   "WabitAirCard", "WabitAirCardEditor",
+  // movie mode card
+  "findMovieModeEntity", "movieLightRow", "MOVIE_SCHEMA", "MOVIE_DOMAINS",
+  "WabitMovieModeCard", "WabitMovieModeCardEditor",
 ];
 
 export { mkEl, mkShadow };

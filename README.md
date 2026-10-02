@@ -8,6 +8,7 @@ each time.
 
 | Card | What it does |
 | --- | --- |
+| `wabit-movie-mode-card` | One unmistakable switch for movie mode, with the lights it is meant to change listed underneath so you can see the automation actually fired. |
 | `wabit-air-card` | Air quality in a room: one plain-English verdict over graphs of every reading, with the particle sizes sharing a chart and a hover readout on all of them. |
 | `wabit-f1-card` | The next Grand Prix: where, when, the circuit layout, the session times and the weather at the track. |
 | `wabit-media-card` | What is playing in a room, across speakers, TVs and streamers, with the active one brought to the front. |
@@ -36,6 +37,81 @@ type: module
 ```
 
 Then add the card from the dashboard card picker ("Wabit Wakeup"), or paste YAML.
+
+## `wabit-movie-mode-card`
+
+```yaml
+type: custom:wabit-movie-mode-card
+```
+
+One big switch for a movie-mode helper, and underneath it the lights that mode is
+supposed to change. The list is the point: the helper flipping proves nothing about
+whether the automation behind it ran, so the card puts the room's real state next to the
+switch that claims to control it. With nothing configured it finds a movie-mode helper
+on its own.
+
+### Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | string | **required** | `custom:wabit-movie-mode-card` |
+| `entity` | entity | found automatically | The `input_boolean` or `switch` movie mode lives on. |
+| `title` | string | – | Card header. Left out, there is no header and the switch is labelled with the entity's own name. |
+| `show_lights` | boolean | `true` | Whether to list the lights under the switch. |
+| `lights` | list | – | The lights to list. Group entities read best here — one row for the ceiling, one for the walls. |
+
+The whole hero is the tap target rather than a small switch at the end of a row, and it
+calls `toggle` rather than `turn_on`/`turn_off`, so it stays correct even if the state
+changed between the last render and your tap.
+
+### Discovery
+
+A candidate is any `input_boolean` or `switch` whose id mentions `movie`, `cinema` or
+`film`. A helper outranks a switch, because a switch is usually a physical device rather
+than a mode flag, and an exact `..._mode` outranks a looser match.
+
+An id reading `override`, `disable`, `ignore` or `suppress` is skipped **outright**, not
+merely ranked low. Such a flag is the *inverse* of the mode, so a card that fell back to
+one would do the opposite of what it says.
+
+### What the rows show
+
+| Light state | Row reads |
+| --- | --- |
+| Off | `Off` |
+| On and dimmable | its brightness, e.g. `20%` |
+| On but not dimmable | `100%` |
+| Unavailable | `Unavailable` |
+
+The dot beside each name takes the bulb's current colour when it reports one, so a warm
+dimmed wall light reads differently from a cold bright ceiling. A light that has been
+renamed or removed drops its row instead of rendering a broken one.
+
+### The helper
+
+The card toggles a helper; it does not create one. The lighting itself belongs in an
+automation, so it keeps working when no dashboard is open.
+
+`input_boolean.yaml`:
+
+```yaml
+movie_mode:
+  name: Movie Mode
+  icon: mdi:movie-open
+```
+
+Leave `initial:` out. Home Assistant resets the helper to it on every restart, silently
+discarding whatever the switch was last set to.
+
+A card wired to a living room looks like this:
+
+```yaml
+type: custom:wabit-movie-mode-card
+entity: input_boolean.movie_mode
+lights:
+  - light.living_room_ceiling
+  - light.living_room_accent
+```
 
 ## `wabit-air-card`
 
@@ -730,6 +806,7 @@ node test/bin-card.test.mjs        # bin collection card
 node test/media-card.test.mjs      # media card
 node test/f1-card.test.mjs         # f1 card
 node test/air-card.test.mjs        # air card
+node test/movie-mode-card.test.mjs # movie mode card
 ```
 
 Both suites share `test/dom-stub.mjs`, which stubs just enough of the DOM to load the
