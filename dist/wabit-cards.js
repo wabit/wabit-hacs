@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.19.0";
+const VERSION = "1.20.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -5261,33 +5261,21 @@ const AIR_COLORS = {
  * full width where the shape carries information and half where it does not.
  */
 const AIR_CHARTS = [
-  {
-    key: "climate", title: "Temperature & humidity", icon: "mdi:thermometer",
-    metrics: ["temperature", "humidity"],
-    width: "full", legend: true, independent: true, labels: true, line_width: 2,
-  },
+  { key: "temperature", metrics: ["temperature"], width: "half" },
+  { key: "humidity", metrics: ["humidity"], width: "half" },
   {
     key: "pm", title: "Particulate matter", icon: "mdi:blur",
     metrics: ["pm1", "pm25", "pm4", "pm10"],
-    width: "full", legend: true, line_width: 1, lower_bound: 0,
+    width: "full", labels: false, line_width: 1, lower_bound: 0,
   },
-  {
-    key: "co2", metrics: ["co2"], width: "full",
-    labels: true, extrema: true, line_width: 2, lower_bound: 0,
-  },
-  {
-    key: "pressure", metrics: ["pressure"], width: "full",
-    labels: true, extrema: true, line_width: 2,
-  },
-  {
-    key: "voc", metrics: ["voc"], width: "half",
-    labels: true, extrema: true, line_width: 2, lower_bound: 0, upper_bound: 500,
-  },
-  {
-    key: "nox", metrics: ["nox"], width: "half",
-    labels: true, extrema: true, line_width: 2, lower_bound: 0, upper_bound: 500,
-  },
+  { key: "co2", metrics: ["co2"], width: "half", lower_bound: 0 },
+  { key: "pressure", metrics: ["pressure"], width: "half" },
+  { key: "voc", metrics: ["voc"], width: "half", lower_bound: 0, upper_bound: 500 },
+  { key: "nox", metrics: ["nox"], width: "half", lower_bound: 0, upper_bound: 500 },
 ];
+
+/** Every metric key, for validating a configured layout. */
+const AIR_METRIC_KEYS = AIR_METRICS.map((m) => m.key);
 
 /**
  * Where each metric stops being good and starts being poor. Only the ones that
@@ -5698,6 +5686,7 @@ class WabitAirCard extends HTMLElement {
     if (cfg.metrics !== undefined && !Array.isArray(cfg.metrics)) {
       throw new Error("wabit-air-card: `metrics` must be a list of metric names");
     }
+    const layout = airLayout(cfg.layout);
     const hours = Number(cfg.hours);
     const pph = Number(cfg.points_per_hour);
 
@@ -5705,6 +5694,7 @@ class WabitAirCard extends HTMLElement {
       area: isUnset(cfg.area) ? null : String(cfg.area),
       entities: Array.isArray(cfg.entities) && cfg.entities.length ? cfg.entities : null,
       metrics: Array.isArray(cfg.metrics) ? cfg.metrics : null,
+      layout,
       title: cfg.title,
       show_header: cfg.show_header !== false,
       show_verdict: cfg.show_verdict !== false,
@@ -5791,7 +5781,11 @@ class WabitAirCard extends HTMLElement {
       };
     });
 
-    return { metrics: read, verdict: airVerdict(read, cfg.thresholds), charts: airChartsFor(read) };
+    return {
+      metrics: read,
+      verdict: airVerdict(read, cfg.thresholds),
+      charts: airChartsFor(read, cfg.layout),
+    };
   }
 
   _render() {
@@ -6318,32 +6312,199 @@ class WabitAirCard extends HTMLElement {
   }
 }
 
-/** Groups the metrics that were found into the charts that can be drawn. */
-function airChartsFor(metrics) {
+/**
+ * Reads a configured layout. A graph can be written as an object, as a bare
+ * list of readings, or as a single reading - all three say the same thing, and
+ * the shortest one is usually what somebody writing YAML by hand wants.
+ */
+function airLayout(raw) {
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw)) {
+    throw new Error("wabit-air-card: `layout` must be a list of graphs");
+  }
+  return raw.map((entry, i) => {
+    const where = `\`layout\` graph ${i + 1}`;
+    let spec;
+    if (typeof entry === "string") spec = { metrics: [entry] };
+    else if (Array.isArray(entry)) spec = { metrics: entry };
+    else if (entry && typeof entry === "object") spec = { ...entry };
+    else throw new Error(`wabit-air-card: ${where} is not a graph`);
+
+    if (!Array.isArray(spec.metrics) || !spec.metrics.length) {
+      throw new Error(`wabit-air-card: ${where} needs a list of readings`);
+    }
+    for (const key of spec.metrics) {
+      if (!AIR_METRIC_KEYS.includes(key)) {
+        throw new Error(
+          `wabit-air-card: ${where} asks for "${key}", which is not a reading. ` +
+          `Pick from: ${AIR_METRIC_KEYS.join(", ")}`
+        );
+      }
+    }
+    if (spec.width !== undefined && spec.width !== "half" && spec.width !== "full") {
+      throw new Error(`wabit-air-card: ${where} must be \`half\` or \`full\` wide`);
+    }
+    return spec;
+  });
+}
+
+/**
+ * Fills out one chart from a layout entry and the series it turned out to
+ * have. Everything a chart needs can be inferred from its contents, so a
+ * layout only has to say which readings go together and how wide.
+ */
+function airChart(spec, series, key) {
+  const units = new Set(series.map((s) => s.unit || ""));
+  const pick = (name, fallback) => (spec[name] === undefined ? fallback : spec[name]);
+  return {
+    ...spec,
+    key,
+    series,
+    width: spec.width === "full" ? "full" : series.length > 2 ? "full" : "half",
+    line_width: pick("line_width", series.length > 2 ? 1 : 2),
+    legend: pick("legend", series.length > 1),
+    labels: pick("labels", series.length <= 2),
+    extrema: pick("extrema", series.length === 1),
+    // Lines in different units cannot share an axis; they get one each.
+    independent: units.size > 1,
+    title: spec.title || series.map((x) => x.label).join(" & "),
+    icon: spec.icon || series[0].icon,
+  };
+}
+
+/**
+ * Groups the metrics that were found into the charts that can be drawn.
+ *
+ * A configured layout goes first and takes what it asks for. Whatever it did
+ * not mention falls through to the default grouping rather than being scattered
+ * one graph per reading, so arranging two of them does not break up the rest -
+ * and a sensor added to the room later still turns up.
+ */
+function airChartsFor(metrics, layout) {
   const byKey = new Map(metrics.map((m) => [m.key, m]));
   const claimed = new Set();
   const out = [];
-  for (const spec of AIR_CHARTS) {
-    const series = spec.metrics.map((k) => byKey.get(k)).filter(Boolean);
-    if (!series.length) continue;
-    series.forEach((s) => claimed.add(s.key));
-    out.push({
-      ...spec,
-      series,
-      title: spec.title || series[0].label,
-      icon: spec.icon || series[0].icon,
+
+  const take = (specs, prefix) => {
+    specs.forEach((spec, i) => {
+      const series = (spec.metrics || [])
+        .map((k) => byKey.get(k))
+        .filter((x) => x && !claimed.has(x.key));
+      if (!series.length) return;
+      series.forEach((x) => claimed.add(x.key));
+      out.push(airChart(spec, series, prefix ? `${prefix}${i}` : spec.key));
     });
-  }
-  // A sensor no chart asked for still deserves to be drawn.
+  };
+
+  if (layout && layout.length) take(layout, "row");
+  take(AIR_CHARTS, null);
   for (const m of metrics) {
     if (claimed.has(m.key)) continue;
-    out.push({
-      key: m.key, metrics: [m.key], series: [m], width: "half",
-      line_width: 2, title: m.label, icon: m.icon,
-    });
+    claimed.add(m.key);
+    out.push(airChart({ metrics: [m.key], width: "half" }, [m], m.key));
   }
   return out;
 }
+
+/* ------------------------------------------------- layout editing helpers */
+
+/** Every available reading, arranged the way the card would draw it. */
+function airLayoutFor(metrics, layout) {
+  return airChartsFor(metrics, layout).map((c) => ({
+    metrics: c.series.map((x) => x.key),
+    width: c.width,
+  }));
+}
+
+/** Moves a graph to a new position. */
+function airMoveGraph(layout, from, to) {
+  const next = layout.map((g) => ({ ...g, metrics: [...g.metrics] }));
+  if (from === to || from < 0 || from >= next.length) return next;
+  const [moved] = next.splice(from, 1);
+  next.splice(Math.max(0, Math.min(next.length, to)), 0, moved);
+  return next;
+}
+
+/** Moves one reading into another graph, dropping any graph left empty. */
+function airMoveReading(layout, from, key, to) {
+  const copy = () => layout.map((g) => ({ ...g, metrics: [...g.metrics] }));
+  if (from === to || !layout[to] || !layout[from]) return copy();
+  const next = layout.map((g) => ({ ...g, metrics: g.metrics.filter((k) => k !== key) }));
+  next[to].metrics.push(key);
+  return next.filter((g) => g.metrics.length);
+}
+
+/** Pulls a reading out into a graph of its own, just after the one it left. */
+function airSplitReading(layout, row, key) {
+  const next = layout.map((g) => ({ ...g, metrics: [...g.metrics] }));
+  const g = next[row];
+  if (!g || g.metrics.length < 2 || !g.metrics.includes(key)) return next;
+  g.metrics = g.metrics.filter((k) => k !== key);
+  next.splice(row + 1, 0, { metrics: [key], width: "half" });
+  return next;
+}
+
+/** Sets how wide one graph is drawn. */
+function airSetWidth(layout, row, width) {
+  return layout.map((g, i) => ({ ...g, metrics: [...g.metrics], width: i === row ? width : g.width }));
+}
+
+/**
+ * The shortest way of writing a layout that still means the same thing: a
+ * graph only needs its width spelled out when it is not the one it would get
+ * anyway, which keeps the saved YAML readable.
+ */
+function airLayoutShorthand(layout) {
+  return layout.map((g) => {
+    const natural = g.metrics.length > 2 ? "full" : "half";
+    return g.width === natural
+      ? [...g.metrics]
+      : { metrics: [...g.metrics], width: g.width };
+  });
+}
+
+const AIR_EDITOR_STYLES = `
+  .layout { margin-top: 20px; }
+  .layout-title { font-size: 0.95rem; font-weight: 500; }
+  .layout-hint {
+    font-size: 0.78rem; color: var(--secondary-text-color, #727272);
+    margin: 2px 0 10px; line-height: 1.4;
+  }
+  .rows { display: flex; flex-direction: column; gap: 6px; }
+  .row {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    border: 1px solid var(--divider-color, #e0e0e0); border-radius: 10px;
+  }
+  .row.dragging { opacity: 0.4; }
+  .row.over { border-color: var(--primary-color, #3f51b5); }
+  .grip { cursor: grab; color: var(--secondary-text-color, #727272); line-height: 1; flex: none; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; min-width: 0; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; cursor: grab;
+    border-radius: 999px; padding: 3px 4px 3px 9px; font-size: 0.78rem;
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.16));
+  }
+  .chip .sw { width: 8px; height: 8px; border-radius: 50%; background: var(--series); flex: none; }
+  .chip.alone .split { display: none; }
+  .row button {
+    border: none; background: none; color: inherit; cursor: pointer;
+    padding: 0 3px; line-height: 1; opacity: 0.65; font-size: 0.95rem;
+  }
+  .row button:hover { opacity: 1; }
+  .row .w {
+    border: 1px solid var(--divider-color, #e0e0e0); border-radius: 999px;
+    font-size: 0.68rem; padding: 3px 9px; opacity: 1; white-space: nowrap; flex: none;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .nudge { display: flex; flex-direction: column; flex: none; }
+  .nudge button { font-size: 0.6rem; padding: 0 2px; }
+  .layout-actions { margin-top: 10px; }
+  .layout-actions button {
+    border: 1px solid var(--divider-color, #e0e0e0); border-radius: 999px;
+    background: none; color: inherit; cursor: pointer; font-size: 0.78rem; padding: 5px 12px;
+  }
+  .layout-note { font-size: 0.8rem; color: var(--secondary-text-color, #727272); }
+`;
 
 /* -------------------------------------------------- wabit-air-card-editor */
 
@@ -6425,6 +6586,7 @@ class WabitAirCardEditor extends HTMLElement {
     });
     root.appendChild(form);
     this._form = form;
+    this._buildLayout(root);
     this._built = true;
   }
 
@@ -6449,6 +6611,213 @@ class WabitAirCardEditor extends HTMLElement {
       show_header: this._config.show_header !== false,
     };
     if (JSON.stringify(this._form.data) !== JSON.stringify(data)) this._form.data = data;
+    this._renderLayout();
+  }
+
+  _buildLayout(root) {
+    const style = document.createElement("style");
+    style.textContent = AIR_EDITOR_STYLES;
+    root.appendChild(style);
+
+    const wrap = document.createElement("div");
+    wrap.className = "layout";
+    const title = document.createElement("div");
+    title.className = "layout-title";
+    title.textContent = "Layout";
+    const hint = document.createElement("div");
+    hint.className = "layout-hint";
+    hint.textContent =
+      "Drag a graph by its handle to reorder it, or drag a reading onto another " +
+      "graph to put them on the same axes. Half-width graphs pair up on a row.";
+    const rows = document.createElement("div");
+    rows.className = "rows";
+    const note = document.createElement("div");
+    note.className = "layout-note";
+    note.style.display = "none";
+
+    const actions = document.createElement("div");
+    actions.className = "layout-actions";
+    const reset = document.createElement("button");
+    reset.textContent = "Reset to default";
+    reset.addEventListener("click", () => {
+      this._config = { ...this._config };
+      delete this._config.layout;
+      fireEvent(this, "config-changed", { config: this._config });
+      this._renderLayout();
+    });
+    actions.appendChild(reset);
+
+    wrap.append(title, hint, note, rows, actions);
+    root.appendChild(wrap);
+    this._layoutEls = { wrap, rows, note, actions };
+  }
+
+  /** The readings this card would find, in the order the card draws them. */
+  _available() {
+    const hass = this._hass;
+    const cfg = this._config || {};
+    if (!hass) return [];
+    let metrics = [];
+    if (Array.isArray(cfg.entities) && cfg.entities.length) {
+      metrics = matchAirMetrics(
+        cfg.entities.filter((id) => hass.states[id]).map((id) => ({ id, st: hass.states[id] }))
+      );
+    } else if (!isUnset(cfg.area) && hass.areas && hass.entities) {
+      const areaId = resolveAreaId(hass, cfg.area);
+      if (areaId) metrics = airSensorsInArea(hass, areaId);
+    }
+    if (Array.isArray(cfg.metrics)) {
+      metrics = cfg.metrics.map((k) => metrics.find((m) => m.key === k)).filter(Boolean);
+    }
+    const colors = { ...AIR_COLORS, ...(cfg.colors || {}) };
+    return metrics.map((m) => ({
+      ...m,
+      unit: (m.st.attributes || {}).unit_of_measurement || "",
+      color: colors[m.key] || "currentColor",
+    }));
+  }
+
+  _applyLayout(layout) {
+    this._config = { ...this._config, layout: airLayoutShorthand(layout) };
+    fireEvent(this, "config-changed", { config: this._config });
+    this._renderLayout();
+  }
+
+  _renderLayout() {
+    const els = this._layoutEls;
+    if (!els) return;
+    const metrics = this._available();
+    els.rows.innerHTML = "";
+
+    if (!metrics.length) {
+      els.note.style.display = "";
+      els.note.textContent = this._hass
+        ? "Pick a room first, then its readings can be arranged here."
+        : "";
+      els.actions.style.display = "none";
+      return;
+    }
+    els.note.style.display = "none";
+    els.actions.style.display = "";
+
+    let saved = null;
+    try {
+      saved = airLayout((this._config || {}).layout);
+    } catch (err) {
+      saved = null;   // a layout the card would reject is not worth editing around
+    }
+    const layout = airLayoutFor(metrics, saved);
+    const byKey = new Map(metrics.map((m) => [m.key, m]));
+    this._rows = [];
+
+    layout.forEach((graph, i) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.draggable = true;
+      row.setAttribute("draggable", "true");
+
+      const grip = document.createElement("span");
+      grip.className = "grip";
+      grip.textContent = "⠿";
+
+      const chips = document.createElement("div");
+      chips.className = "chips";
+      graph.metrics.forEach((key) => {
+        const m = byKey.get(key);
+        const chip = document.createElement("div");
+        chip.className = graph.metrics.length > 1 ? "chip" : "chip alone";
+        chip.draggable = true;
+        chip.setAttribute("draggable", "true");
+        chip.style.setProperty("--series", (m && m.color) || "currentColor");
+        const sw = document.createElement("span");
+        sw.className = "sw";
+        const name = document.createElement("span");
+        name.textContent = (m && m.label) || key;
+        const split = document.createElement("button");
+        split.className = "split";
+        split.title = "Give this reading a graph of its own";
+        split.textContent = "×";
+        split.addEventListener("click", (ev) => {
+          if (ev.stopPropagation) ev.stopPropagation();
+          this._applyLayout(airSplitReading(layout, i, key));
+        });
+        chip.append(sw, name, split);
+        chip.addEventListener("dragstart", (ev) => {
+          if (ev.stopPropagation) ev.stopPropagation();
+          this._drag = { kind: "chip", from: i, key };
+          this._setDragData(ev, key);
+        });
+        chip.addEventListener("dragend", () => this._endDrag());
+        chips.appendChild(chip);
+      });
+
+      const width = document.createElement("button");
+      width.className = "w";
+      width.textContent = graph.width === "full" ? "Full" : "Half";
+      width.title = "How wide this graph is drawn";
+      width.addEventListener("click", () =>
+        this._applyLayout(airSetWidth(layout, i, graph.width === "full" ? "half" : "full"))
+      );
+
+      // Dragging is the quick way, but it does not exist on a touchscreen.
+      const nudge = document.createElement("div");
+      nudge.className = "nudge";
+      const up = document.createElement("button");
+      up.textContent = "▲";
+      up.title = "Move up";
+      up.addEventListener("click", () => this._applyLayout(airMoveGraph(layout, i, i - 1)));
+      const down = document.createElement("button");
+      down.textContent = "▼";
+      down.title = "Move down";
+      down.addEventListener("click", () => this._applyLayout(airMoveGraph(layout, i, i + 1)));
+      nudge.append(up, down);
+
+      row.append(grip, chips, width, nudge);
+      row.addEventListener("dragstart", (ev) => {
+        this._drag = { kind: "row", from: i };
+        this._setDragData(ev, String(i));
+        row.classList.add("dragging");
+      });
+      row.addEventListener("dragend", () => {
+        row.classList.remove("dragging");
+        this._endDrag();
+      });
+      row.addEventListener("dragover", (ev) => {
+        if (!this._drag) return;
+        if (ev.preventDefault) ev.preventDefault();
+        row.classList.add("over");
+      });
+      row.addEventListener("dragleave", () => row.classList.remove("over"));
+      row.addEventListener("drop", (ev) => {
+        if (ev.preventDefault) ev.preventDefault();
+        if (ev.stopPropagation) ev.stopPropagation();
+        const drag = this._drag;
+        this._drag = null;
+        row.classList.remove("over");
+        if (!drag) return;
+        this._applyLayout(
+          drag.kind === "row"
+            ? airMoveGraph(layout, drag.from, i)
+            : airMoveReading(layout, drag.from, drag.key, i)
+        );
+      });
+      els.rows.appendChild(row);
+      this._rows.push({ row, chips, width, nudge: { up, down }, graph });
+    });
+  }
+
+  _setDragData(ev, value) {
+    if (!ev || !ev.dataTransfer) return;
+    ev.dataTransfer.effectAllowed = "move";
+    try {
+      ev.dataTransfer.setData("text/plain", value);
+    } catch (err) {
+      /* Safari refuses setData outside a real drag; the drag still works. */
+    }
+  }
+
+  _endDrag() {
+    this._drag = null;
   }
 }
 

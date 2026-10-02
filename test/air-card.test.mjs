@@ -183,12 +183,13 @@ eq("no readings, no extrema", T.seriesExtrema([null, null]), null);
 /* ---------------------------------------------------------- chart layout */
 const charts = T.airChartsFor(found.map((m) => ({ ...m, value: 1, color: "#000" })));
 eq("one chart per group", charts.map((c) => c.key),
-   ["climate", "pm", "co2", "pressure", "voc", "nox"]);
-eq("temperature and humidity share the one at the top",
-   chartOfSpec(charts, "climate").series.map((s) => s.key), ["temperature", "humidity"]);
-eq("full width", chartOfSpec(charts, "climate").width, "full");
-// Degrees and a percentage cannot share an axis, so each gets its own scale.
-eq("and each line keeps its own scale", chartOfSpec(charts, "climate").independent, true);
+   ["temperature", "humidity", "pm", "co2", "pressure", "voc", "nox"]);
+// Half-width graphs pair up on a row: temperature beside humidity, CO2 beside
+// pressure, VOC beside NOx, with the four-line PM chart spanning both columns.
+eq("the pairs are half width",
+   ["temperature", "humidity", "co2", "pressure", "voc", "nox"]
+     .map((k) => chartOfSpec(charts, k).width),
+   ["half", "half", "half", "half", "half", "half"]);
 // The four particle sizes are only meaningful against each other.
 eq("the particle sizes share a chart", chartOfSpec(charts, "pm").series.map((s) => s.key),
    ["pm1", "pm25", "pm4", "pm10"]);
@@ -196,8 +197,8 @@ eq("in ascending size", chartOfSpec(charts, "pm").series.map((s) => s.label),
    ["PM1.0", "PM2.5", "PM4.0", "PM10"]);
 eq("the shared chart spans the card", chartOfSpec(charts, "pm").width, "full");
 eq("and carries a legend", chartOfSpec(charts, "pm").legend, true);
-eq("CO₂ gets the full width too", chartOfSpec(charts, "co2").width, "full");
-eq("an index chart only needs half", chartOfSpec(charts, "voc").width, "half");
+eq("only the shared chart spans both columns",
+   charts.filter((c) => c.width === "full").map((c) => c.key), ["pm"]);
 eq("the index charts are pinned to 0-500",
    [chartOfSpec(charts, "voc").lower_bound, chartOfSpec(charts, "voc").upper_bound], [0, 500]);
 function chartOfSpec(list, key) { return list.find((c) => c.key === key); }
@@ -217,8 +218,8 @@ eq("titled after the room", card._els.title.textContent, "Office");
 eq("verdict shown", card._els.verdict.classList.contains("hidden"), false);
 eq("the air is good", card._els.verdictWord.textContent, "Air is good");
 eq("and says why", card._els.verdictWhy.textContent, "Everything measured is within range.");
-eq("six charts", card._els.chartEls.length, 6);
-eq("climate leads", card._els.chartEls[0].spec.key, "climate");
+eq("seven charts", card._els.chartEls.length, 7);
+eq("temperature leads", card._els.chartEls[0].spec.key, "temperature");
 
 const pm = chartOf(card, "pm");
 eq("four lines on the PM chart", pm.series.length, 4);
@@ -239,12 +240,11 @@ eq("and a thicker line", co2.series[0].line.getAttribute("stroke-width"), "2");
 eq("with the live reading in the header",
    co2.state.children.map((c) => c.textContent), ["413", "ppm"]);
 eq("no legend for a single line", co2.legend.classList.contains("hidden"), true);
-const climate = chartOf(card, "climate");
-eq("temperature keeps its colour", climate.series[0].metric.color, "#e53935");
-eq("humidity too", climate.series[1].metric.color, "#1e88e5");
-eq("both are named in the legend", climate.series.map((s) => s.legendVal.textContent),
-   ["27.9 °C", "42.2 %"]);
-eq("no single headline figure for two units", climate.state.textContent, "");
+eq("temperature keeps its colour",
+   chartOf(card, "temperature").series[0].metric.color, "#e53935");
+eq("humidity too", chartOf(card, "humidity").series[0].metric.color, "#1e88e5");
+eq("each shows its own reading",
+   chartOf(card, "humidity").state.children.map((c) => c.textContent), ["42.2", "%"]);
 eq("pressure too", chartOf(card, "pressure").series[0].metric.color, "#2196f3");
 
 const poor = mk({ area: "office" }, { states: { ...hass.states,
@@ -255,7 +255,7 @@ eq("naming the culprit", poor._els.verdictWhy.textContent, "CO₂ is the highest
 eq("the chart at fault is marked",
    chartOf(poor, "co2").bandDot.classList.contains("hidden"), false);
 eq("a chart that is fine is not",
-   chartOf(poor, "climate").bandDot.classList.contains("hidden"), true);
+   chartOf(poor, "humidity").bandDot.classList.contains("hidden"), true);
 
 /* --------------------------------------------------------------- history */
 const now = Date.now();
@@ -314,10 +314,19 @@ eq("an edge marker is pulled inside", liveCo2.extMax.style.transform, "translate
 eq("a sensor with no history is not drawn",
    chartOf(live, "pressure").plot.classList.contains("hidden"), true);
 
-// Temperature runs 20-31 and humidity 60-71. On one axis the pair would span
-// 20-71 and each line would use a fifth of the height; on their own scales
-// both fill it, which is the point of putting them together.
-const liveClimate = chartOf(live, "climate");
+/* ------------------------------------------------- two readings, one chart */
+/* Temperature runs 20-31 and humidity 60-71. On one axis the pair would span
+   20-71 and each line would use a fifth of the height; on their own scales
+   both fill it, which is the point of putting them together. */
+const paired = new T.WabitAirCard();
+paired.setConfig({ area: "office", hours: 6, layout: [["temperature", "humidity"]] });
+paired.hass = histHass;
+await new Promise((r) => setTimeout(r, 0));
+const liveClimate = paired._els.chartEls[0];
+
+eq("a layout can put two readings on one chart",
+   liveClimate.series.map((s) => s.metric.key), ["temperature", "humidity"]);
+eq("named after both", liveClimate.spec.title, "Temperature & Humidity");
 eq("each line gets its own scale",
    liveClimate.series.map((s) => s.bounds), [{ min: 20, max: 31 }, { min: 60, max: 71 }]);
 eq("so the chart has no single axis", liveClimate.bounds, null);
@@ -336,13 +345,25 @@ eq("labelled with their own range",
 eq("and coloured to their line",
    liveClimate.series.map((s) => s.axisMax.style.getPropertyValue("--series")),
    ["#e53935", "#1e88e5"]);
-eq("turning labels off takes both",
-   mk({ area: "office", show_labels: false })._els.chartEls[0]
-     .series.every((s) => s.axisMax.classList.contains("hidden")), true);
 eq("both lines reach the top of the box",
    liveClimate.series.map((s) => s.line.getAttribute("d").includes(",0.00")), [true, true]);
 eq("and the bottom",
    liveClimate.series.map((s) => s.line.getAttribute("d").includes(",100.00")), [true, true]);
+// Readings in the same unit still share one axis - that is the whole point of
+// putting the particle sizes together.
+eq("one unit, one axis",
+   T.airChartsFor(found.map((m) => ({ ...m, unit: "x", value: 1 })),
+                  [{ metrics: ["pm1", "pm25"] }])[0].independent, false);
+eq("two units, two axes",
+   T.airChartsFor(found.map((m) => ({ ...m, unit: m.key, value: 1 })),
+                  [{ metrics: ["pm1", "co2"] }])[0].independent, true);
+
+const liveCo2b = chartOf(paired, "co2");
+eq("the rest of the readings are still drawn",
+   paired._els.chartEls.map((h) => h.spec.key).slice(1),
+   ["pm", "co2", "pressure", "voc", "nox"]);
+eq("each on its own", liveCo2b.series.length, 1);
+
 // The readout is where the real numbers live on a chart like this.
 live._hover(liveClimate, 1);
 eq("hover reads both units", liveClimate.series.map((s) => s.tipVal.textContent),
@@ -384,11 +405,11 @@ const broken = new T.WabitAirCard();
 broken.setConfig({ area: "office" });
 broken.hass = { ...hass, callWS: () => Promise.reject(new Error("nope")) };
 await new Promise((r) => setTimeout(r, 0));
-eq("a failed history leaves the card standing", broken._els.chartEls.length, 6);
+eq("a failed history leaves the card standing", broken._els.chartEls.length, 7);
 eq("the readings are still there", chartOf(broken, "co2").state.children[0].textContent, "413");
 eq("just no graphs",
    broken._els.chartEls.every((h) => h.plot.classList.contains("hidden")), true);
-eq("no websocket, no trouble", mk({ area: "office" })._els.chartEls.length, 6);
+eq("no websocket, no trouble", mk({ area: "office" })._els.chartEls.length, 7);
 
 /* ---------------------------------------------------------------- config */
 const picked = mk({ area: "office", metrics: ["co2", "pm25"] });
@@ -431,6 +452,41 @@ eq("resolution is configurable",
    mk({ area: "office", points_per_hour: 30 })._config.points_per_hour, 30);
 eq("and clamped", mk({ area: "office", points_per_hour: 999 })._config.points_per_hour, 60);
 
+/* ---------------------------------------------------------------- layout */
+const laid = mk({ area: "office", layout: [
+  { metrics: ["co2", "pressure"], width: "full" },
+  ["temperature", "humidity"],
+  "voc",
+] });
+eq("the layout sets the order",
+   laid._els.chartEls.slice(0, 3).map((h) => h.series.map((s) => s.metric.key)),
+   [["co2", "pressure"], ["temperature", "humidity"], ["voc"]]);
+eq("and the widths",
+   laid._els.chartEls.slice(0, 3).map((h) => h.spec.width), ["full", "half", "half"]);
+// Readings the layout leaves out are still drawn, so adding a sensor to the
+// room does not quietly vanish behind an old layout.
+// What the layout did not mention keeps its default grouping - the particle
+// sizes stay on one chart rather than being split into four.
+eq("everything else keeps its default grouping",
+   laid._els.chartEls.slice(3).map((h) => h.spec.key), ["pm", "nox"]);
+eq("a graph whose readings are all missing is skipped",
+   mk({ area: "office", layout: [["co2"], ["pm25"]] })._els.chartEls[0].spec.key, "row0");
+
+throws("the layout must be a list",
+  () => new T.WabitAirCard().setConfig({ area: "x", layout: "co2" }),
+  "must be a list of graphs");
+throws("a graph needs readings",
+  () => new T.WabitAirCard().setConfig({ area: "x", layout: [{ width: "full" }] }),
+  "graph 1 needs a list of readings");
+throws("and they have to be real ones",
+  () => new T.WabitAirCard().setConfig({ area: "x", layout: [["co2", "smell"]] }),
+  'graph 1 asks for "smell"');
+throws("naming the ones that are",
+  () => new T.WabitAirCard().setConfig({ area: "x", layout: [["smell"]] }), "pm25");
+throws("width is half or full",
+  () => new T.WabitAirCard().setConfig({ area: "x", layout: [{ metrics: ["co2"], width: "wide" }] }),
+  "must be `half` or `full`");
+
 /* --------------------------------------------------------- failure modes */
 const empty = mk({ area: "hallway" });
 eq("an empty room explains itself", empty._els.empty.textContent,
@@ -451,6 +507,53 @@ throws("entities must be sensors",
 throws("metrics must be a list",
   () => new T.WabitAirCard().setConfig({ area: "x", metrics: "co2" }), "must be a list");
 
+/* --------------------------------------------------- rearranging a layout */
+const L = [
+  { metrics: ["temperature"], width: "half" },
+  { metrics: ["humidity"], width: "half" },
+  { metrics: ["co2"], width: "half" },
+];
+eq("a graph can move down", T.airMoveGraph(L, 0, 2).map((g) => g.metrics[0]),
+   ["humidity", "co2", "temperature"]);
+eq("and back up", T.airMoveGraph(L, 2, 0).map((g) => g.metrics[0]),
+   ["co2", "temperature", "humidity"]);
+eq("moving past the end stops at it", T.airMoveGraph(L, 0, 9).map((g) => g.metrics[0]),
+   ["humidity", "co2", "temperature"]);
+eq("and past the start", T.airMoveGraph(L, 2, -3).map((g) => g.metrics[0]),
+   ["co2", "temperature", "humidity"]);
+eq("moving nowhere changes nothing", T.airMoveGraph(L, 1, 1), L);
+eq("the original is left alone", L.map((g) => g.metrics[0]),
+   ["temperature", "humidity", "co2"]);
+
+eq("a reading can join another graph",
+   T.airMoveReading(L, 1, "humidity", 0).map((g) => g.metrics),
+   [["temperature", "humidity"], ["co2"]]);
+// The graph it came from is gone, not left behind as an empty box.
+eq("and the graph it emptied goes with it", T.airMoveReading(L, 1, "humidity", 0).length, 2);
+eq("dropping a reading on its own graph does nothing",
+   T.airMoveReading(L, 1, "humidity", 1).map((g) => g.metrics),
+   [["temperature"], ["humidity"], ["co2"]]);
+
+const merged = T.airMoveReading(L, 1, "humidity", 0);
+eq("a reading can be pulled back out",
+   T.airSplitReading(merged, 0, "humidity").map((g) => g.metrics),
+   [["temperature"], ["humidity"], ["co2"]]);
+eq("the last reading cannot leave its graph",
+   T.airSplitReading(L, 0, "temperature").map((g) => g.metrics),
+   [["temperature"], ["humidity"], ["co2"]]);
+
+eq("a graph can be widened", T.airSetWidth(L, 1, "full").map((g) => g.width),
+   ["half", "full", "half"]);
+
+// Saved YAML only spells out a width that is not the one it would get anyway.
+eq("a layout is written the short way",
+   T.airLayoutShorthand([
+     { metrics: ["temperature"], width: "half" },
+     { metrics: ["pm1", "pm25", "pm4", "pm10"], width: "full" },
+     { metrics: ["co2"], width: "full" },
+   ]),
+   [["temperature"], ["pm1", "pm25", "pm4", "pm10"], { metrics: ["co2"], width: "full" }]);
+
 /* ---------------------------------------------------------------- editor */
 customElements.define("ha-form", class {});
 const editor = (cfg) => {
@@ -468,6 +571,93 @@ eq("graphs default to on", fields.data.show_graphs, true);
 // A card saved under 1.16.0 used `show_sparklines`; it must still read back.
 eq("the old option name still reads back",
    editor({ area: "office", show_sparklines: false })._form.data.show_graphs, false);
+/* ----------------------------------------------------- the layout editor */
+const fire = (el, type, ev) => (el._handlers[type] || []).forEach((fn) => fn(ev));
+const dragEvent = () => ({
+  preventDefault() {}, stopPropagation() {},
+  dataTransfer: { setData() {} },
+});
+const led = (cfg) => {
+  const e = new T.WabitAirCardEditor();
+  e.setConfig(cfg || { area: "office" });
+  e.hass = hass;
+  return e;
+};
+
+const lay = led();
+eq("a row per graph", lay._rows.length, 7);
+eq("holding its readings", lay._rows.map((r) => r.graph.metrics),
+   [["temperature"], ["humidity"], ["pm1", "pm25", "pm4", "pm10"],
+    ["co2"], ["pressure"], ["voc"], ["nox"]]);
+eq("every row can be dragged", lay._rows.every((r) => r.row.getAttribute("draggable") === "true"),
+   true);
+eq("and so can every reading in it",
+   lay._rows[2].chips.children.every((c) => c.getAttribute("draggable") === "true"), true);
+eq("the width is shown and togglable", lay._rows.map((r) => r.width.textContent),
+   ["Half", "Half", "Full", "Half", "Half", "Half", "Half"]);
+// A reading on its own has nowhere to split to, so it offers no way to.
+eq("a lone reading cannot be split out",
+   lay._rows[0].chips.children[0].className.includes("alone"), true);
+eq("but one sharing a graph can",
+   lay._rows[2].chips.children[0].className.includes("alone"), false);
+
+// Drag the temperature graph down onto CO2.
+const moved = led();
+fire(moved._rows[0].row, "dragstart", dragEvent());
+fire(moved._rows[3].row, "drop", dragEvent());
+eq("dropping a graph puts it where it landed", moved._config.layout,
+   [["humidity"], ["pm1", "pm25", "pm4", "pm10"], ["co2"], ["temperature"],
+    ["pressure"], ["voc"], ["nox"]]);
+
+// Drag the humidity reading onto the temperature graph.
+const joined = led();
+fire(joined._rows[1].chips.children[0], "dragstart", dragEvent());
+fire(joined._rows[0].row, "drop", dragEvent());
+eq("dropping a reading joins the two", joined._config.layout[0], ["temperature", "humidity"]);
+eq("and the graph it left is gone", joined._config.layout.length, 6);
+eq("the rows redraw to match", joined._rows[0].graph.metrics, ["temperature", "humidity"]);
+// Which is exactly what the card then draws on one chart with two axes.
+const asDrawn = mk({ area: "office", layout: joined._config.layout });
+eq("and the card agrees", asDrawn._els.chartEls[0].series.map((x) => x.metric.key),
+   ["temperature", "humidity"]);
+eq("on two axes", asDrawn._els.chartEls[0].spec.independent, true);
+
+const split = led();
+fire(split._rows[1].chips.children[0], "dragstart", dragEvent());
+fire(split._rows[0].row, "drop", dragEvent());
+// The × on a chip is its last child, after the colour swatch and the name.
+const humidityChip = split._rows[0].chips.children[1];
+humidityChip.children[humidityChip.children.length - 1]._fire("click");
+eq("splitting a reading back out undoes it", split._config.layout.slice(0, 2),
+   [["temperature"], ["humidity"]]);
+
+const wide = led();
+wide._rows[0].width._fire("click");
+eq("the width toggle writes it out", wide._config.layout[0],
+   { metrics: ["temperature"], width: "full" });
+eq("and the button follows", wide._rows[0].width.textContent, "Full");
+
+const nudged = led();
+nudged._rows[1].nudge.up._fire("click");
+eq("the arrows move a graph too", nudged._config.layout.slice(0, 2),
+   [["humidity"], ["temperature"]]);
+nudged._rows[0].nudge.up._fire("click");
+eq("and stop at the top", nudged._config.layout[0], ["humidity"]);
+
+const reset = led({ area: "office", layout: [["co2"]] });
+eq("a saved layout is what gets edited", reset._rows[0].graph.metrics, ["co2"]);
+eq("with everything else still listed", reset._rows.length, 7);
+reset._layoutEls.actions.children[0]._fire("click");
+eq("reset clears it", reset._config.layout, undefined);
+
+// A layout the card would refuse must not take the editor down with it.
+const bad = led({ area: "office", layout: "nonsense" });
+eq("a broken layout falls back to the default", bad._rows.length, 7);
+const noArea = led({ area: "" });
+eq("with no room there is nothing to arrange", noArea._rows, undefined);
+eq("and it says so", noArea._layoutEls.note.textContent,
+   "Pick a room first, then its readings can be arranged here.");
+
 delete customElements._d["ha-form"];
 
 eq("stub picks the room with sensors", T.WabitAirCard.getStubConfig(hass).area, "office");

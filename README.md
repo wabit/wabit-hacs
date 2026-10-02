@@ -64,11 +64,12 @@ Readings are grouped the way they are worth reading:
 
 | Graph | Width | Why |
 | --- | --- | --- |
-| Temperature + Humidity | full | One chart with an axis each - temperature down the left, humidity down the right, both labelled in their line's colour. Degrees and a percentage on one scale would squash whichever has the smaller range into a flat line. |
-| PM1.0 / PM2.5 / PM4.0 / PM10 | full | One chart with four lines on a shared axis starting at zero, so the particle sizes compare honestly - each one only means anything next to the others. |
-| CO₂ | full | The shape over a day is the point of it. |
-| Air pressure | full | Same. |
+| Temperature, Humidity | half each | Side by side on the first row. |
+| PM1.0 / PM2.5 / PM4.0 / PM10 | full | One graph with four lines on a shared axis starting at zero, so the particle sizes compare honestly - each one only means anything next to the others. |
+| CO₂, Air pressure | half each | Paired on a row. |
 | VOC, NOx | half each | Pinned to the 0-500 the index is defined on. |
+
+Half-width graphs pair up on a row; a full-width one spans both columns.
 
 Anything discovered that no graph claims gets its own half-width one, so nothing is
 silently dropped.
@@ -92,6 +93,37 @@ colors:
   co2: "#7e57c2"
 ```
 
+### Rearranging it
+
+![The layout editor](https://raw.githubusercontent.com/wabit/wabit-hacs-dashboard/main/docs/preview-air-editor.png)
+
+The card's visual editor has a **Layout** section listing one row per graph. Drag a row by
+its handle to reorder it, or drag a reading from one row onto another to put those readings
+on the same graph. The `×` on a reading pulls it back out into a graph of its own,
+**Half**/**Full** sets the width, and the arrows do the same job as dragging - for
+touchscreens, where HTML drag and drop does not exist.
+
+It writes a `layout`. A graph can be written three ways, so use whichever reads best:
+
+```yaml
+type: custom:wabit-air-card
+area: office
+layout:
+  - [temperature, humidity]            # one graph, both readings
+  - metrics: [pm1, pm25, pm4, pm10]    # spelled out, to set the width
+    width: full
+  - co2                                # a single reading
+```
+
+Two readings on one graph are handled on their merits: the same unit and they share an
+axis, different units and they get one each - temperature down the left, humidity down the
+right, both labelled in their line's colour. Degrees and a percentage on one scale would
+squash whichever has the smaller range into a flat line.
+
+A reading the layout does not mention keeps its default grouping and follows on at the end,
+so rearranging two of them does not break up the rest, and a sensor added to the room later
+still turns up.
+
 ### Options
 
 | Option | Type | Default | Description |
@@ -100,6 +132,7 @@ colors:
 | `area` | string | **required*** | Area id, name or alias. *Not required if `entities` is given. |
 | `entities` | list | - | Specific sensors, skipping discovery entirely. |
 | `metrics` | list | all that are found | Which readings to show. See below. |
+| `layout` | list | see above | Which readings share a graph, in what order, how wide. |
 | `colors` | map | see above | Line colour per reading. |
 | `title` | string | the room name | Card header. |
 | `show_header` | boolean | `true` | The header. |
@@ -116,7 +149,7 @@ colors:
 An axis label is dropped where an extremum marker already answers it - either it reads the
 same number, or it would be printed on top of it. A chart whose lines are each on their own
 scale gets one axis per line instead, on the left and right, coloured to match; a third line
-on such a chart would be drawn but not given an axis, because there are only two sides.
+on such a graph would be drawn but not given an axis, because there are only two sides.
 
 For graphs that sit straight on the card with no panel behind them:
 

@@ -112,7 +112,9 @@ const EXPORTS = [
   "airSensorsInArea", "matchAirMetrics", "airBand", "airVerdict",
   "airPrecision", "AIR_THRESHOLDS", "AIR_COLORS", "AIR_CHARTS",
   "bucketSeries", "chartBounds", "chartY", "linePath", "areaPath",
-  "seriesExtrema", "airChartsFor", "AIR_SCHEMA",
+  "seriesExtrema", "airChartsFor", "AIR_SCHEMA", "airLayout", "airLayoutFor",
+  "airMoveGraph", "airMoveReading", "airSplitReading", "airSetWidth",
+  "airLayoutShorthand",
   "WabitAirCard", "WabitAirCardEditor",
 ];
 
