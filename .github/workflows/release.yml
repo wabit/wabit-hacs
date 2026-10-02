@@ -25,6 +25,7 @@ jobs:
       - run: node test/media-card.test.mjs
       - run: node test/f1-card.test.mjs
       - run: node test/air-card.test.mjs
+      - run: node test/movie-mode-card.test.mjs
 
       # GitHub can deliver a tag push more than once, and a re-run is a normal
       # thing to want, so creating the release has to be safe to repeat.

@@ -10,7 +10,7 @@
  * theme the dashboard is using instead of imposing its own palette.
  */
 
-const VERSION = "1.20.0";
+const VERSION = "1.21.0";
 const REPO = "https://github.com/wabit/wabit-hacs-dashboard";
 
 console.info(
@@ -6835,6 +6835,491 @@ if (!window.customCards.some((c) => c.type === "wabit-air-card")) {
     description:
       "Air quality for a room: one verdict, every reading, and the trend behind " +
       "each - in place of a stack of graphs.",
+    preview: true,
+    documentationURL: REPO,
+  });
+}
+
+/* ---------------------------------------------------- wabit-movie-mode-card */
+
+/**
+ * Movie mode is a single boolean that a dashboard flips and automations react
+ * to, so this card has two jobs: make that one switch unmistakable, and show
+ * what it actually did to the room. The second half earns its space because
+ * the lights are the only feedback that the mode really took effect - the
+ * boolean itself flipping proves nothing about whether the automation ran.
+ */
+
+const MOVIE_DOMAINS = ["input_boolean", "switch"];
+
+/**
+ * Pick the most likely movie-mode toggle so a freshly dropped card is useful
+ * before it is configured. An "override"-style flag is skipped outright rather
+ * than merely ranked low: it is the inverse of the mode, so picking one - even
+ * as a last resort - would make the card do the opposite of what it says.
+ */
+function findMovieModeEntity(hass) {
+  const states = (hass && hass.states) || {};
+  let best = null;
+  let bestScore = 0;
+  for (const id of Object.keys(states)) {
+    const dot = id.indexOf(".");
+    if (dot < 0) continue;
+    const domain = id.slice(0, dot);
+    const object = id.slice(dot + 1);
+    if (!MOVIE_DOMAINS.includes(domain)) continue;
+    if (!/movie|cinema|film/.test(object)) continue;
+    if (/override|disable|ignore|suppress/.test(object)) continue;
+    let score = /(^|_)(movie|cinema|film)_mode(_|$)/.test(object) ? 4 : 2;
+    // A switch is usually a physical device; a mode flag is a helper.
+    if (domain === "input_boolean") score += 1;
+    if (score > bestScore) {
+      best = id;
+      bestScore = score;
+    }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+/**
+ * One "what movie mode did" line. Returns null for an entity that has gone
+ * away, so a renamed or removed light quietly drops its row rather than
+ * rendering a broken one.
+ */
+function movieLightRow(hass, id) {
+  const st = (hass && hass.states && hass.states[id]) || null;
+  if (!st) return null;
+  const unavailable = isUnset(st.state);
+  const on = st.state === "on";
+  return {
+    id,
+    name: (st.attributes && st.attributes.friendly_name) || id,
+    on,
+    pct: on ? brightnessPct(st) : 0,
+    unavailable,
+    detail: unavailable ? "Unavailable" : on ? brightnessPct(st) + "%" : "Off",
+    colour: lightColourCss(st),
+  };
+}
+
+const MOVIE_SCHEMA = [
+  { name: "entity", selector: { entity: { domain: MOVIE_DOMAINS } } },
+  { name: "title", selector: { text: {} } },
+  { name: "show_lights", selector: { boolean: {} } },
+  { name: "lights", selector: { entity: { domain: "light", multiple: true } } },
+];
+
+const MOVIE_LABELS = {
+  entity: "Movie mode switch",
+  title: "Title",
+  show_lights: "Show what it changed",
+  lights: "Lights to list",
+};
+
+const MOVIE_STYLES = `
+  :host {
+    display: block;
+
+    /* Theme tokens: Material You first, then core HA, then a safe literal. */
+    --mv-text: var(--md-sys-color-on-surface, var(--primary-text-color, #212121));
+    --mv-muted: var(--md-sys-color-on-surface-variant, var(--secondary-text-color, #727272));
+    --mv-accent: var(--md-sys-color-primary, var(--primary-color, #3f51b5));
+    --mv-surface: var(--md-sys-color-surface, var(--card-background-color, #ffffff));
+    --mv-outline: var(--md-sys-color-outline-variant, var(--divider-color, #e0e0e0));
+    --mv-tonal: var(--md-sys-color-surface-container-highest,
+                rgba(var(--rgb-primary-text-color, 33, 33, 33), 0.08));
+    --mv-accent-tonal: var(--md-sys-color-primary-container,
+                       rgba(var(--rgb-primary-color, 63, 81, 181), 0.16));
+    --mv-on-accent-tonal: var(--md-sys-color-on-primary-container, var(--mv-accent));
+  }
+
+  ha-card { overflow: hidden; }
+
+  /* Mirrors Home Assistant's own .card-header so a title still looks native. */
+  .title {
+    padding: 12px 16px 4px;
+    color: var(--ha-card-header-color, var(--mv-text));
+    font-family: var(--ha-card-header-font-family, inherit);
+    font-size: var(--ha-card-header-font-size, 24px);
+    font-weight: 400; letter-spacing: -0.012em; line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .title.hidden { display: none; }
+
+  .body { padding: 12px 16px 16px; }
+
+  .error {
+    padding: 12px; border-radius: 12px; line-height: 1.5; font-size: 0.9rem;
+    background: rgba(var(--rgb-error-color, 219, 68, 55), 0.12);
+    color: var(--error-color, #db4437);
+  }
+
+  /* ------------------------------------------------------------- toggle */
+  /* The whole hero is one button: a card with a single purpose should not
+     make you aim at a small switch. */
+  .toggle {
+    display: flex; align-items: center; gap: 14px; width: 100%;
+    box-sizing: border-box; font: inherit; text-align: left; cursor: pointer;
+    padding: 14px 16px; border-radius: 18px;
+    background: var(--mv-tonal); color: var(--mv-text);
+    border: 1px solid var(--mv-outline);
+    transition: background 180ms, border-color 180ms, color 180ms;
+  }
+  .toggle:hover { border-color: var(--mv-accent); }
+  .toggle:focus-visible { outline: 2px solid var(--mv-accent); outline-offset: 2px; }
+  .toggle.on {
+    background: var(--mv-accent-tonal); color: var(--mv-on-accent-tonal);
+    border-color: transparent;
+  }
+  .toggle:disabled { opacity: 0.5; cursor: default; }
+
+  .glyph { flex: none; color: inherit; --mdc-icon-size: 28px; }
+  .labels { flex: 1; min-width: 0; }
+  .name {
+    font-size: 1.05rem; font-weight: 500; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sub {
+    font-size: 0.8rem; color: var(--mv-muted); margin-top: 1px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .toggle.on .sub { color: inherit; opacity: 0.75; }
+
+  /* Drawn rather than an ha-switch, so there is no dependency on a component
+     whose internals differ between HA versions. */
+  .track {
+    flex: none; position: relative; width: 48px; height: 28px;
+    border-radius: 999px; background: var(--mv-outline);
+    transition: background 180ms;
+  }
+  .toggle.on .track { background: var(--mv-accent); }
+  .thumb {
+    position: absolute; top: 3px; left: 3px; width: 22px; height: 22px;
+    border-radius: 50%; background: var(--mv-surface);
+    transition: transform 180ms;
+  }
+  .toggle.on .thumb { transform: translateX(20px); }
+  @media (prefers-reduced-motion: reduce) {
+    .toggle, .track, .thumb { transition: none; }
+  }
+
+  /* --------------------------------------------------------------- rows */
+  .rows { display: flex; flex-direction: column; margin-top: 10px; }
+  .rows.hidden { display: none; }
+  .row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 4px; border-top: 1px solid var(--mv-outline);
+  }
+  .row:first-child { border-top: none; }
+  .dot {
+    flex: none; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--mv-outline);
+  }
+  .dot.on { background: var(--mv-accent); }
+  .rname {
+    flex: 1; min-width: 0; font-size: 0.92rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .rdetail {
+    flex: none; font-size: 0.85rem; color: var(--mv-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .rdetail.off { opacity: 0.7; }
+`;
+
+class WabitMovieModeCard extends HTMLElement {
+  static getConfigElement() {
+    return document.createElement("wabit-movie-mode-card-editor");
+  }
+
+  static getStubConfig(hass) {
+    const stub = { type: "custom:wabit-movie-mode-card" };
+    const found = findMovieModeEntity(hass);
+    if (found) stub.entity = found;
+    return stub;
+  }
+
+  setConfig(config) {
+    const cfg = config || {};
+    if (!isUnset(cfg.entity)) {
+      const domain = String(cfg.entity).split(".")[0];
+      if (!MOVIE_DOMAINS.includes(domain)) {
+        throw new Error(
+          "wabit-movie-mode-card: `entity` must be an input_boolean or a switch"
+        );
+      }
+    }
+    const lights = Array.isArray(cfg.lights)
+      ? cfg.lights.filter((x) => !isUnset(x)).map(String)
+      : [];
+    for (const id of lights) {
+      if (!id.startsWith("light.")) {
+        throw new Error("wabit-movie-mode-card: `lights` must all be light entities");
+      }
+    }
+    this._config = {
+      entity: isUnset(cfg.entity) ? null : String(cfg.entity),
+      title: isUnset(cfg.title) ? null : String(cfg.title),
+      show_lights: cfg.show_lights !== false,
+      lights,
+    };
+    this._built = false;
+    this._rowsKey = null;
+    if (this.shadowRoot) this.shadowRoot.innerHTML = "";
+    if (this._hass) this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._config) this._render();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  getCardSize() {
+    const rows =
+      this._config && this._config.show_lights ? this._config.lights.length : 0;
+    return 2 + Math.ceil(rows / 2);
+  }
+
+  /** The configured switch, or whatever discovery can find. */
+  _entityId() {
+    const explicit = this._config && this._config.entity;
+    return explicit || findMovieModeEntity(this._hass);
+  }
+
+  _toggle() {
+    const id = this._entityId();
+    if (!id || !this._hass || typeof this._hass.callService !== "function") return;
+    // `toggle` rather than turn_on/turn_off: a single call that stays correct
+    // even if the state changed between the last render and the tap.
+    this._hass.callService(id.split(".")[0], "toggle", { entity_id: id });
+  }
+
+  _model() {
+    const id = this._entityId();
+    const st = id && this._hass && this._hass.states ? this._hass.states[id] : null;
+    const cfg = this._config;
+    const rows = cfg.show_lights
+      ? cfg.lights.map((l) => movieLightRow(this._hass, l)).filter(Boolean)
+      : [];
+    return {
+      id,
+      missing: !id,
+      unavailable: !!st && isUnset(st.state),
+      on: !!st && st.state === "on",
+      name:
+        cfg.title ||
+        (st && st.attributes && st.attributes.friendly_name) ||
+        "Movie Mode",
+      rows,
+    };
+  }
+
+  _build() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = MOVIE_STYLES;
+    root.appendChild(style);
+
+    const card = document.createElement("ha-card");
+    root.appendChild(card);
+
+    const title = document.createElement("div");
+    title.className = "title hidden";
+    card.appendChild(title);
+
+    const body = document.createElement("div");
+    body.className = "body";
+    card.appendChild(body);
+
+    const error = document.createElement("div");
+    error.className = "error";
+    error.style.display = "none";
+    body.appendChild(error);
+
+    const toggle = document.createElement("button");
+    toggle.className = "toggle";
+    toggle.setAttribute("type", "button");
+    toggle.addEventListener("click", () => this._toggle());
+
+    const glyph = document.createElement("ha-icon");
+    glyph.className = "glyph";
+
+    const labels = document.createElement("div");
+    labels.className = "labels";
+    const name = document.createElement("div");
+    name.className = "name";
+    const sub = document.createElement("div");
+    sub.className = "sub";
+    labels.append(name, sub);
+
+    const track = document.createElement("div");
+    track.className = "track";
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    track.appendChild(thumb);
+
+    toggle.append(glyph, labels, track);
+    body.appendChild(toggle);
+
+    const rows = document.createElement("div");
+    rows.className = "rows";
+    body.appendChild(rows);
+
+    this._els = { card, title, body, error, toggle, glyph, name, sub, rows };
+    this._built = true;
+  }
+
+  /* Rows are rebuilt only when the set of lights changes - keyed on ids, never
+     on anything the user might be typing. */
+  _buildRows(model) {
+    const key = model.rows.map((r) => r.id).join("|");
+    if (key === this._rowsKey) return;
+    this._rowsKey = key;
+    const host = this._els.rows;
+    host.innerHTML = "";
+    this._rowEls = model.rows.map(() => {
+      const row = document.createElement("div");
+      row.className = "row";
+      const dot = document.createElement("div");
+      dot.className = "dot";
+      const rname = document.createElement("div");
+      rname.className = "rname";
+      const rdetail = document.createElement("div");
+      rdetail.className = "rdetail";
+      row.append(dot, rname, rdetail);
+      host.appendChild(row);
+      return { row, dot, rname, rdetail };
+    });
+  }
+
+  _render() {
+    if (!this._built) this._build();
+    const els = this._els;
+    const model = this._model();
+
+    els.title.textContent = this._config.title || "";
+    els.title.classList.toggle("hidden", !this._config.title);
+
+    if (model.missing) {
+      els.error.style.display = "";
+      els.error.textContent =
+        "No movie mode switch found. Set `entity` to an input_boolean or switch - " +
+        "for example input_boolean.movie_mode.";
+      els.toggle.style.display = "none";
+      els.rows.classList.add("hidden");
+      return;
+    }
+    els.error.style.display = "none";
+    els.toggle.style.display = "";
+
+    els.glyph.setAttribute("icon", model.on ? "mdi:movie-open" : "mdi:movie-outline");
+    els.name.textContent = model.name;
+    els.sub.textContent = model.unavailable ? "Unavailable" : model.on ? "On" : "Off";
+    els.toggle.classList.toggle("on", model.on);
+    els.toggle.disabled = model.unavailable;
+
+    this._buildRows(model);
+    els.rows.classList.toggle("hidden", model.rows.length === 0);
+    model.rows.forEach((r, i) => {
+      const e = this._rowEls[i];
+      if (!e) return;
+      e.dot.classList.toggle("on", r.on);
+      // The dot carries the bulb's real colour when it has one, so a warm
+      // dimmed wall light reads differently from a cold bright ceiling.
+      if (r.colour) e.dot.style.background = r.colour;
+      else e.dot.style.removeProperty("background");
+      e.rname.textContent = r.name;
+      e.rdetail.textContent = r.detail;
+      e.rdetail.classList.toggle("off", !r.on);
+    });
+  }
+}
+
+class WabitMovieModeCardEditor extends HTMLElement {
+  setConfig(config) {
+    this._config = { ...(config || {}) };
+    if (!this._built) this._build();
+    this._push();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._push();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  _build() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = EDITOR_STYLES;
+    root.appendChild(style);
+
+    if (!customElements.get("ha-form")) {
+      const note = document.createElement("div");
+      note.className = "note";
+      note.textContent =
+        "This Home Assistant build does not provide ha-form, so the visual editor " +
+        "is unavailable. Configure this card in YAML instead - the options are " +
+        "documented at " + REPO;
+      root.appendChild(note);
+      this._form = null;
+      this._built = true;
+      return;
+    }
+
+    const form = document.createElement("ha-form");
+    form.schema = MOVIE_SCHEMA;
+    form.computeLabel = (s) => MOVIE_LABELS[s.name] || s.name;
+    form.addEventListener("value-changed", (ev) => {
+      ev.stopPropagation();
+      this._config = { ...this._config, ...ev.detail.value };
+      fireEvent(this, "config-changed", { config: this._config });
+    });
+    root.appendChild(form);
+    this._form = form;
+    this._built = true;
+  }
+
+  _push() {
+    if (!this._form || !this._hass || !this._config) return;
+    this._form.hass = this._hass;
+    const data = {
+      entity: this._config.entity,
+      title: this._config.title,
+      show_lights: this._config.show_lights !== false,
+      lights: Array.isArray(this._config.lights) ? this._config.lights : [],
+    };
+    if (JSON.stringify(this._form.data) !== JSON.stringify(data)) this._form.data = data;
+  }
+}
+
+if (!customElements.get("wabit-movie-mode-card")) {
+  customElements.define("wabit-movie-mode-card", WabitMovieModeCard);
+}
+if (!customElements.get("wabit-movie-mode-card-editor")) {
+  customElements.define("wabit-movie-mode-card-editor", WabitMovieModeCardEditor);
+}
+
+if (!window.customCards.some((c) => c.type === "wabit-movie-mode-card")) {
+  window.customCards.push({
+    type: "wabit-movie-mode-card",
+    name: "Wabit Movie Mode",
+    description:
+      "One unmistakable switch for movie mode, and the lights it changed so you " +
+      "can see it actually took effect.",
     preview: true,
     documentationURL: REPO,
   });

@@ -32,3 +32,4 @@ jobs:
       - run: node test/media-card.test.mjs
       - run: node test/f1-card.test.mjs
       - run: node test/air-card.test.mjs
+      - run: node test/movie-mode-card.test.mjs
